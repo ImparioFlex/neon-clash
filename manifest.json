@@ -1,0 +1,22 @@
+{
+  "name": "NEON CLASH",
+  "short_name": "NEON CLASH",
+  "description": "Sci-fi 2D fighting game",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#06060e",
+  "theme_color": "#00f0ff",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

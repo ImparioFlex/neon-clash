@@ -1,0 +1,1900 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="NEON CLASH">
+<meta name="theme-color" content="#06060e">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>NEON CLASH</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#06060e;
+  -webkit-touch-callout:none;-webkit-user-select:none;user-select:none;
+  touch-action:none;position:fixed;top:0;left:0}
+canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas id="gc"></canvas>
+<script>
+'use strict';
+/*
+ * ════════════════════════════════════════════════════════════════
+ *  NEON CLASH — Sci-fi 2D Fighting Game
+ * ════════════════════════════════════════════════════════════════
+ *
+ *  NOVA  — Cyber Ninja (Player / Blue-Cyan)
+ *    Lithe, lightning-fast operative from the Neon Sprawl.
+ *    Fights with energy blades and plasma tech.
+ *    Special 1  "Plasma Bolt"   (Crouch + Punch)  — horizontal energy projectile
+ *    Special 2  "Neon Blade"    (Crouch + Kick)   — dashing blade slash, long range
+ *
+ *  TITAN — Mech Brawler (CPU / Red-Orange)
+ *    Heavily armored enforcer built for close-range devastation.
+ *    Augmented fists and thruster-assisted strikes.
+ *    Special 1  "Seismic Slam"  (Crouch + Punch)  — ground-pound shockwave
+ *    Special 2  "Rocket Upper"  (Crouch + Kick)   — jet-boosted rising uppercut
+ */
+
+// ═══════════════════════════════════════
+//  CONSTANTS
+// ═══════════════════════════════════════
+const VW = 1280, VH = 720;
+const FLOOR_Y = 540;
+const STAGE_L = 60, STAGE_R = 1220;
+const GRAVITY = 0.65;
+const ROUND_TIME = 99;
+const WINS_NEEDED = 2;
+const HIT_STOP_FRAMES = 6;
+const BLOCK_DAMAGE_MULT = 0.12;
+const BLOCK_PUSH = 8;
+const KNOCKBACK_BASE = 7;
+
+// ═══════════════════════════════════════
+//  CANVAS SETUP
+// ═══════════════════════════════════════
+const canvas = document.getElementById('gc');
+const ctx = canvas.getContext('2d');
+let CW, CH, scale, offX, offY, dpr;
+
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  CW = window.innerWidth * dpr;
+  CH = window.innerHeight * dpr;
+  canvas.width = CW;
+  canvas.height = CH;
+  scale = Math.min(CW / VW, CH / VH);
+  offX = (CW - VW * scale) / 2;
+  offY = (CH - VH * scale) / 2;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ═══════════════════════════════════════
+//  UTILITIES
+// ═══════════════════════════════════════
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const ease = t => t < 0.5 ? 2*t*t : -1+(4-2*t)*t;
+const rand = (a, b) => Math.random() * (b - a) + a;
+const randInt = (a, b) => Math.floor(rand(a, b + 1));
+
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// ═══════════════════════════════════════
+//  INPUT SYSTEM
+// ═══════════════════════════════════════
+const input = { left:false, right:false, up:false, down:false,
+  punch:false, kick:false, block:false,
+  punchPressed:false, kickPressed:false };
+let prevPunch = false, prevKick = false;
+
+// Touch button definitions — positions are fractions of screen size
+const TOUCH_BUTTONS = {
+  // Left d-pad
+  left:  { cx: 0.09, cy: 0.73, r: 0.045, label: '◀' },
+  right: { cx: 0.19, cy: 0.73, r: 0.045, label: '▶' },
+  up:    { cx: 0.14, cy: 0.60, r: 0.045, label: '▲' },
+  down:  { cx: 0.14, cy: 0.86, r: 0.045, label: '▼' },
+  // Right action buttons
+  punch: { cx: 0.81, cy: 0.65, r: 0.050, label: 'P', color: '#00f0ff' },
+  kick:  { cx: 0.92, cy: 0.75, r: 0.050, label: 'K', color: '#ff6600' },
+  block: { cx: 0.81, cy: 0.85, r: 0.050, label: 'B', color: '#aaaaaa' },
+};
+
+const activeTouches = new Map(); // touchId -> buttonName
+
+function getTouchButton(sx, sy) {
+  const nx = sx / window.innerWidth;
+  const ny = sy / window.innerHeight;
+  let best = null, bestDist = Infinity;
+  for (const [name, btn] of Object.entries(TOUCH_BUTTONS)) {
+    const dx = nx - btn.cx, dy = ny - btn.cy;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if (dist < btn.r * 1.6 && dist < bestDist) {
+      best = name; bestDist = dist;
+    }
+  }
+  return best;
+}
+
+function updateInputFromTouches() {
+  const pressed = new Set();
+  for (const btn of activeTouches.values()) if (btn) pressed.add(btn);
+  input.left  = pressed.has('left');
+  input.right = pressed.has('right');
+  input.up    = pressed.has('up');
+  input.down  = pressed.has('down');
+  input.punch = pressed.has('punch');
+  input.kick  = pressed.has('kick');
+  input.block = pressed.has('block');
+}
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    const btn = getTouchButton(t.clientX, t.clientY);
+    activeTouches.set(t.identifier, btn);
+  }
+  updateInputFromTouches();
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    const btn = getTouchButton(t.clientX, t.clientY);
+    activeTouches.set(t.identifier, btn);
+  }
+  updateInputFromTouches();
+}, { passive: false });
+
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) activeTouches.delete(t.identifier);
+  updateInputFromTouches();
+}, { passive: false });
+
+canvas.addEventListener('touchcancel', e => {
+  for (const t of e.changedTouches) activeTouches.delete(t.identifier);
+  updateInputFromTouches();
+}, { passive: false });
+
+// Keyboard fallback for desktop testing
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.code] = true; });
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+function pollKeyboard() {
+  input.left  = input.left  || !!keys['ArrowLeft']  || !!keys['KeyA'];
+  input.right = input.right || !!keys['ArrowRight'] || !!keys['KeyD'];
+  input.up    = input.up    || !!keys['ArrowUp']    || !!keys['KeyW'];
+  input.down  = input.down  || !!keys['ArrowDown']  || !!keys['KeyS'];
+  input.punch = input.punch || !!keys['KeyJ'] || !!keys['KeyZ'];
+  input.kick  = input.kick  || !!keys['KeyK'] || !!keys['KeyX'];
+  input.block = input.block || !!keys['KeyL'] || !!keys['KeyC'];
+}
+
+// ═══════════════════════════════════════
+//  PARTICLE SYSTEM
+// ═══════════════════════════════════════
+const particles = [];
+const MAX_PARTICLES = 200;
+
+function spawnParticle(x, y, vx, vy, color, life, size, glow) {
+  if (particles.length >= MAX_PARTICLES) particles.shift();
+  particles.push({ x, y, vx, vy, color, life, maxLife: life, size, glow: glow || 8 });
+}
+
+function spawnHitSparks(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    const angle = rand(-Math.PI, Math.PI);
+    const speed = rand(3, 10);
+    spawnParticle(x, y, Math.cos(angle)*speed, Math.sin(angle)*speed - 2,
+      color, randInt(12, 25), rand(2, 5), 12);
+  }
+}
+
+function spawnBlockSparks(x, y) {
+  for (let i = 0; i < 8; i++) {
+    const angle = rand(-0.8, 0.8) - Math.PI/2;
+    spawnParticle(x, y, Math.cos(angle)*rand(2,6), Math.sin(angle)*rand(2,6),
+      '#ffffff', randInt(8, 15), rand(1, 3), 6);
+  }
+}
+
+function updateParticles() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx; p.y += p.vy;
+    p.vy += 0.15;
+    p.vx *= 0.97;
+    p.life--;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+// ═══════════════════════════════════════
+//  PROJECTILE SYSTEM
+// ═══════════════════════════════════════
+const projectiles = [];
+
+function spawnProjectile(owner, x, y, vx, damage, color) {
+  projectiles.push({ owner, x, y, vx, damage, color, life: 120, w: 40, h: 16, hit: false });
+}
+
+function updateProjectiles(p1, p2) {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const proj = projectiles[i];
+    proj.x += proj.vx;
+    proj.life--;
+    if (proj.life <= 0 || proj.x < STAGE_L - 100 || proj.x > STAGE_R + 100) {
+      projectiles.splice(i, 1); continue;
+    }
+    // Check hit
+    const target = proj.owner === p1 ? p2 : p1;
+    if (!proj.hit && target.state !== 'ko') {
+      const projRect = { x: proj.x - proj.w/2, y: proj.y - proj.h/2, w: proj.w, h: proj.h };
+      const targetRect = getHurtbox(target);
+      if (rectsOverlap(projRect, targetRect)) {
+        proj.hit = true;
+        projectiles.splice(i, 1);
+        applyHit(target, proj.damage, proj.vx > 0 ? 1 : -1, proj.owner);
+      }
+    }
+  }
+}
+
+// ═══════════════════════════════════════
+//  CHARACTER DEFINITION
+// ═══════════════════════════════════════
+function createCharacter(isNova, startX, facing) {
+  return {
+    name: isNova ? 'NOVA' : 'TITAN',
+    isNova,
+    // Colors
+    primary:   isNova ? '#00f0ff' : '#ff4400',
+    secondary: isNova ? '#0088cc' : '#ff8800',
+    accent:    isNova ? '#ffffff' : '#ffcc00',
+    dark:      isNova ? '#003344' : '#441100',
+    // Physics
+    x: startX, y: FLOOR_Y,
+    vx: 0, vy: 0,
+    facing,
+    grounded: true,
+    // Dimensions
+    bodyW: isNova ? 36 : 52,
+    bodyH: isNova ? 110 : 105,
+    headR: isNova ? 17 : 21,
+    // State
+    state: 'idle',
+    animTimer: 0,
+    animDuration: 1,
+    canAct: true,
+    hitstun: 0,
+    blockstun: 0,
+    hasHit: false, // per-attack flag
+    // Combat stats
+    maxHP: isNova ? 1000 : 1100,
+    hp: isNova ? 1000 : 1100,
+    displayHP: isNova ? 1000 : 1100,
+    walkSpeed: isNova ? 4.5 : 3.2,
+    jumpForce: isNova ? -14 : -12.5,
+    // Attack data
+    attacks: {
+      punch: {
+        damage: isNova ? 55 : 75,
+        range: isNova ? 80 : 70,
+        duration: isNova ? 16 : 20,
+        activeStart: isNova ? 4 : 6,
+        activeEnd: isNova ? 8 : 11,
+        knockback: isNova ? 5 : 8,
+        hitboxW: isNova ? 60 : 55,
+        hitboxH: 40,
+        hitboxOY: -60,
+      },
+      kick: {
+        damage: isNova ? 75 : 95,
+        range: isNova ? 100 : 90,
+        duration: isNova ? 22 : 26,
+        activeStart: isNova ? 7 : 9,
+        activeEnd: isNova ? 13 : 16,
+        knockback: isNova ? 7 : 10,
+        hitboxW: isNova ? 80 : 70,
+        hitboxH: 35,
+        hitboxOY: -30,
+      },
+      air_punch: {
+        damage: isNova ? 50 : 70,
+        range: isNova ? 70 : 60,
+        duration: 14,
+        activeStart: 3,
+        activeEnd: 8,
+        knockback: 4,
+        hitboxW: 55,
+        hitboxH: 50,
+        hitboxOY: -50,
+      },
+      air_kick: {
+        damage: isNova ? 70 : 85,
+        range: isNova ? 90 : 80,
+        duration: 18,
+        activeStart: 5,
+        activeEnd: 11,
+        knockback: 6,
+        hitboxW: 70,
+        hitboxH: 45,
+        hitboxOY: -40,
+      },
+      special1: {
+        damage: isNova ? 100 : 120,
+        range: isNova ? 900 : 180,
+        duration: isNova ? 28 : 32,
+        activeStart: isNova ? 12 : 14,
+        activeEnd: isNova ? 14 : 20,
+        knockback: isNova ? 3 : 12,
+        hitboxW: isNova ? 30 : 160,
+        hitboxH: isNova ? 20 : 50,
+        hitboxOY: isNova ? -55 : -20,
+        isProjectile: isNova,
+      },
+      special2: {
+        damage: isNova ? 110 : 140,
+        range: isNova ? 140 : 75,
+        duration: isNova ? 24 : 30,
+        activeStart: isNova ? 8 : 10,
+        activeEnd: isNova ? 15 : 18,
+        knockback: isNova ? 10 : 14,
+        hitboxW: isNova ? 120 : 60,
+        hitboxH: isNova ? 40 : 90,
+        hitboxOY: isNova ? -30 : -80,
+      },
+    },
+    // Round record
+    wins: 0,
+  };
+}
+
+// ═══════════════════════════════════════
+//  CHARACTER HELPERS
+// ═══════════════════════════════════════
+function getHurtbox(c) {
+  const crouch = (c.state === 'crouch' || c.state === 'special1' || c.state === 'special2') ? 0.65 : 1;
+  const h = c.bodyH * crouch;
+  return { x: c.x - c.bodyW/2, y: c.y - h, w: c.bodyW, h };
+}
+
+function getHitbox(c) {
+  const atk = c.attacks[c.state];
+  if (!atk) return null;
+  if (c.animTimer < atk.activeStart || c.animTimer > atk.activeEnd) return null;
+  if (c.hasHit) return null;
+  const fx = c.facing;
+  return {
+    x: c.x + (fx > 0 ? 10 : -10 - atk.hitboxW),
+    y: c.y + atk.hitboxOY,
+    w: atk.hitboxW,
+    h: atk.hitboxH,
+  };
+}
+
+function startAttack(c, attackName) {
+  const atk = c.attacks[attackName];
+  if (!atk) return;
+  c.state = attackName;
+  c.animTimer = 0;
+  c.animDuration = atk.duration;
+  c.canAct = false;
+  c.hasHit = false;
+  // Projectile special — spawn projectile at the right frame (handled in update)
+}
+
+function resetCharacter(c, startX, facing) {
+  c.x = startX; c.y = FLOOR_Y;
+  c.vx = 0; c.vy = 0;
+  c.facing = facing;
+  c.grounded = true;
+  c.state = 'idle';
+  c.animTimer = 0; c.animDuration = 1;
+  c.canAct = true;
+  c.hitstun = 0; c.blockstun = 0;
+  c.hasHit = false;
+  c.hp = c.maxHP;
+  c.displayHP = c.maxHP;
+}
+
+// ═══════════════════════════════════════
+//  HIT RESOLUTION
+// ═══════════════════════════════════════
+let hitstopTimer = 0;
+let screenShake = { x: 0, y: 0, intensity: 0 };
+
+function applyHit(target, damage, direction, attacker) {
+  const isBlocking = target.state === 'block';
+
+  if (isBlocking) {
+    // Blocked
+    target.hp -= Math.floor(damage * BLOCK_DAMAGE_MULT);
+    target.blockstun = 12;
+    target.state = 'blockstun';
+    target.animTimer = 0;
+    target.animDuration = 12;
+    target.canAct = false;
+    target.vx = direction * BLOCK_PUSH;
+    spawnBlockSparks(target.x - direction * 20, target.y - target.bodyH * 0.5);
+    hitstopTimer = 3;
+  } else {
+    // Clean hit
+    target.hp -= damage;
+    target.hitstun = 18;
+    target.state = 'hit';
+    target.animTimer = 0;
+    target.animDuration = 18;
+    target.canAct = false;
+    target.vx = direction * KNOCKBACK_BASE + direction * (damage / 25);
+    target.vy = -3;
+    spawnHitSparks(target.x - direction * 15, target.y - target.bodyH * 0.5,
+      attacker.primary, 15);
+    hitstopTimer = HIT_STOP_FRAMES;
+    screenShake.intensity = damage / 8;
+  }
+
+  if (target.hp <= 0) {
+    target.hp = 0;
+    target.state = 'ko';
+    target.animTimer = 0;
+    target.animDuration = 90;
+    target.canAct = false;
+    target.vx = direction * 10;
+    target.vy = -8;
+    spawnHitSparks(target.x, target.y - target.bodyH * 0.5, target.primary, 30);
+    screenShake.intensity = 18;
+    hitstopTimer = 14;
+  }
+}
+
+// ═══════════════════════════════════════
+//  CHARACTER UPDATE
+// ═══════════════════════════════════════
+function updateCharacter(c, inp, opponent) {
+  // Animation timer
+  c.animTimer++;
+
+  // Smooth health bar
+  c.displayHP = lerp(c.displayHP, c.hp, 0.1);
+
+  // Auto-face opponent
+  if (c.canAct && c.state !== 'ko') {
+    c.facing = opponent.x > c.x ? 1 : -1;
+  }
+
+  // KO state
+  if (c.state === 'ko') {
+    c.vy += GRAVITY;
+    c.x += c.vx;
+    c.y += c.vy;
+    c.vx *= 0.92;
+    if (c.y >= FLOOR_Y) {
+      c.y = FLOOR_Y;
+      c.vy = 0;
+      c.vx *= 0.8;
+      c.grounded = true;
+    }
+    return;
+  }
+
+  // Hit/blockstun
+  if (c.state === 'hit' || c.state === 'blockstun') {
+    c.vx *= 0.88;
+    c.vy += GRAVITY;
+    c.x += c.vx;
+    c.y += c.vy;
+    if (c.y >= FLOOR_Y) { c.y = FLOOR_Y; c.vy = 0; c.grounded = true; }
+    if (c.animTimer >= c.animDuration) {
+      c.state = 'idle'; c.canAct = true;
+    }
+    c.x = clamp(c.x, STAGE_L + c.bodyW/2, STAGE_R - c.bodyW/2);
+    return;
+  }
+
+  // Attack animation in progress
+  if (!c.canAct && c.state !== 'idle') {
+    // Special1 projectile spawn
+    if (c.state === 'special1' && c.attacks.special1.isProjectile &&
+        c.animTimer === c.attacks.special1.activeStart && !c.hasHit) {
+      spawnProjectile(c, c.x + c.facing * 40, c.y - 55,
+        c.facing * 10, c.attacks.special1.damage, c.primary);
+      c.hasHit = true;
+    }
+    // Forward lunge for special2 (Nova dash, Titan uppercut)
+    if (c.state === 'special2') {
+      const atk = c.attacks.special2;
+      if (c.animTimer >= atk.activeStart && c.animTimer <= atk.activeEnd) {
+        if (c.isNova) {
+          c.x += c.facing * 8; // Nova dashes forward
+        } else if (c.animTimer <= atk.activeStart + 3) {
+          c.vy = -10; // Titan rises
+          c.grounded = false;
+        }
+      }
+    }
+    // Check animation end
+    if (c.animTimer >= c.animDuration) {
+      c.state = 'idle'; c.canAct = true;
+    }
+    // Apply gravity for airborne attacks
+    if (!c.grounded) {
+      c.vy += GRAVITY;
+      c.y += c.vy;
+      if (c.y >= FLOOR_Y) { c.y = FLOOR_Y; c.vy = 0; c.grounded = true; }
+    }
+    c.x += c.vx;
+    c.vx *= 0.92;
+    c.x = clamp(c.x, STAGE_L + c.bodyW/2, STAGE_R - c.bodyW/2);
+    return;
+  }
+
+  // === Player can act ===
+
+  // Gravity
+  if (!c.grounded) {
+    c.vy += GRAVITY;
+    c.y += c.vy;
+    if (c.y >= FLOOR_Y) {
+      c.y = FLOOR_Y; c.vy = 0; c.grounded = true;
+    }
+  }
+
+  // Airborne actions
+  if (!c.grounded) {
+    if (inp.punchPressed) { startAttack(c, 'air_punch'); return; }
+    if (inp.kickPressed) { startAttack(c, 'air_kick'); return; }
+    c.x += c.vx;
+    c.x = clamp(c.x, STAGE_L + c.bodyW/2, STAGE_R - c.bodyW/2);
+    return;
+  }
+
+  // Grounded actions
+  c.vx = 0;
+
+  // Block
+  if (inp.block) {
+    c.state = 'block';
+    c.block = true;
+    return;
+  }
+  c.block = false;
+
+  // Crouch + attack = special
+  if (inp.down) {
+    if (inp.punchPressed) { startAttack(c, 'special1'); return; }
+    if (inp.kickPressed)  { startAttack(c, 'special2'); return; }
+    c.state = 'crouch';
+    return;
+  }
+
+  // Standing attacks
+  if (inp.punchPressed) { startAttack(c, 'punch'); return; }
+  if (inp.kickPressed)  { startAttack(c, 'kick');  return; }
+
+  // Jump
+  if (inp.up && c.grounded) {
+    c.vy = c.jumpForce;
+    c.grounded = false;
+    c.vx = inp.left ? -c.walkSpeed * 1.2 : inp.right ? c.walkSpeed * 1.2 : 0;
+    c.state = 'jump';
+    return;
+  }
+
+  // Walk
+  if (inp.left) {
+    c.vx = -c.walkSpeed;
+    c.state = 'walk';
+  } else if (inp.right) {
+    c.vx = c.walkSpeed;
+    c.state = 'walk';
+  } else {
+    c.state = 'idle';
+  }
+
+  c.x += c.vx;
+  c.x = clamp(c.x, STAGE_L + c.bodyW/2, STAGE_R - c.bodyW/2);
+
+  // Push apart if overlapping
+  const dist = Math.abs(c.x - opponent.x);
+  if (dist < c.bodyW * 0.8 && opponent.state !== 'ko') {
+    const push = (c.bodyW * 0.8 - dist) / 2;
+    if (c.x < opponent.x) { c.x -= push; } else { c.x += push; }
+  }
+}
+
+// ═══════════════════════════════════════
+//  AI SYSTEM
+// ═══════════════════════════════════════
+const AI = {
+  decision: 'idle', timer: 0, aggression: 0.55, reactionDelay: 0,
+  comboTimer: 0, lastPlayerState: 'idle',
+};
+
+function getAIInput(cpu, player) {
+  const inp = { left:false, right:false, up:false, down:false,
+    punch:false, kick:false, block:false, punchPressed:false, kickPressed:false };
+
+  if (cpu.state === 'ko' || !cpu.canAct) return inp;
+
+  const dist = Math.abs(cpu.x - player.x);
+  const facingPlayer = (player.x > cpu.x) === (cpu.facing > 0);
+  const playerAttacking = ['punch','kick','special1','special2','air_punch','air_kick']
+    .includes(player.state);
+  const hpRatio = cpu.hp / cpu.maxHP;
+  const playerHpRatio = player.hp / player.maxHP;
+
+  AI.timer--;
+  if (AI.timer <= 0) {
+    // Make a new decision
+    AI.timer = randInt(8, 22);
+    const r = Math.random();
+
+    // Defensive reaction to player attacks
+    if (playerAttacking && dist < 160 && Math.random() < 0.55) {
+      AI.decision = 'block';
+      AI.timer = randInt(10, 20);
+    }
+    // Close range
+    else if (dist < 100) {
+      if (r < AI.aggression * 0.7) {
+        AI.decision = Math.random() < 0.5 ? 'punch' : 'kick';
+      } else if (r < AI.aggression * 0.7 + 0.15) {
+        AI.decision = Math.random() < 0.5 ? 'special1' : 'special2';
+      } else if (r < 0.85) {
+        AI.decision = 'block';
+      } else {
+        AI.decision = 'retreat';
+      }
+    }
+    // Mid range
+    else if (dist < 250) {
+      if (r < AI.aggression * 0.5) {
+        AI.decision = 'advance';
+      } else if (r < AI.aggression * 0.5 + 0.2) {
+        AI.decision = 'special1'; // Seismic slam range
+      } else if (r < 0.7) {
+        AI.decision = 'advance';
+      } else if (r < 0.85) {
+        AI.decision = 'block';
+      } else {
+        AI.decision = 'retreat';
+      }
+    }
+    // Far range
+    else {
+      if (r < 0.65) {
+        AI.decision = 'advance';
+      } else if (r < 0.8) {
+        AI.decision = 'jump_in';
+      } else {
+        AI.decision = 'idle';
+      }
+    }
+
+    // Increase aggression when losing
+    AI.aggression = clamp(0.55 + (playerHpRatio - hpRatio) * 0.3, 0.3, 0.85);
+  }
+
+  // Counter-attack after blocking
+  if (AI.decision === 'block' && player.state === 'idle' && AI.lastPlayerState !== 'idle' && dist < 140) {
+    AI.decision = Math.random() < 0.5 ? 'punch' : 'special2';
+    AI.timer = 5;
+  }
+  AI.lastPlayerState = player.state;
+
+  // Execute decision
+  switch (AI.decision) {
+    case 'advance':
+      if (cpu.x < player.x) inp.right = true; else inp.left = true;
+      break;
+    case 'retreat':
+      if (cpu.x < player.x) inp.left = true; else inp.right = true;
+      break;
+    case 'jump_in':
+      inp.up = true;
+      if (cpu.x < player.x) inp.right = true; else inp.left = true;
+      AI.decision = 'air_attack';
+      AI.timer = 20;
+      break;
+    case 'air_attack':
+      if (!cpu.grounded) {
+        inp.kickPressed = true; inp.kick = true;
+      } else {
+        AI.decision = 'advance'; AI.timer = 5;
+      }
+      break;
+    case 'punch':
+      inp.punchPressed = true; inp.punch = true;
+      AI.decision = 'idle'; AI.timer = 8;
+      break;
+    case 'kick':
+      inp.kickPressed = true; inp.kick = true;
+      AI.decision = 'idle'; AI.timer = 10;
+      break;
+    case 'special1':
+      inp.down = true; inp.punchPressed = true; inp.punch = true;
+      AI.decision = 'idle'; AI.timer = 15;
+      break;
+    case 'special2':
+      inp.down = true; inp.kickPressed = true; inp.kick = true;
+      AI.decision = 'idle'; AI.timer = 15;
+      break;
+    case 'block':
+      inp.block = true;
+      break;
+  }
+
+  return inp;
+}
+
+// ═══════════════════════════════════════
+//  CAMERA
+// ═══════════════════════════════════════
+const camera = { x: VW/2, y: VH/2, zoom: 1, targetZoom: 1 };
+
+function updateCamera(p1, p2) {
+  const midX = (p1.x + p2.x) / 2;
+  const midY = Math.min(p1.y, p2.y) - 50;
+  const dist = Math.abs(p1.x - p2.x);
+
+  camera.x = lerp(camera.x, midX, 0.08);
+  camera.y = lerp(camera.y, clamp(midY, VH/2 - 80, VH/2), 0.06);
+
+  // Zoom out when far apart
+  const idealZoom = clamp(700 / Math.max(dist + 200, 400), 0.75, 1.15);
+  camera.targetZoom = idealZoom;
+  camera.zoom = lerp(camera.zoom, camera.targetZoom, 0.05);
+
+  // Screen shake decay
+  if (screenShake.intensity > 0.5) {
+    screenShake.x = rand(-1, 1) * screenShake.intensity;
+    screenShake.y = rand(-1, 1) * screenShake.intensity;
+    screenShake.intensity *= 0.85;
+  } else {
+    screenShake.x = 0; screenShake.y = 0; screenShake.intensity = 0;
+  }
+}
+
+// ═══════════════════════════════════════
+//  RENDERING — BACKGROUND
+// ═══════════════════════════════════════
+function drawBackground(camX, camY, zoom) {
+  // Sky gradient
+  const skyGrad = ctx.createLinearGradient(0, 0, 0, VH);
+  skyGrad.addColorStop(0, '#04040c');
+  skyGrad.addColorStop(0.5, '#0a0a2e');
+  skyGrad.addColorStop(1, '#0d1030');
+  ctx.fillStyle = skyGrad;
+  ctx.fillRect(-200, -200, VW + 400, VH + 400);
+
+  // Distant neon city skyline
+  ctx.save();
+  const parallax = -camX * 0.1;
+  ctx.translate(parallax, 0);
+  ctx.globalAlpha = 0.4;
+  drawCitySkyline();
+  ctx.restore();
+
+  // Grid floor (Tron-style)
+  drawGridFloor(camX, zoom);
+
+  // Stage edge pillars
+  drawStagePillars();
+}
+
+function drawCitySkyline() {
+  const buildings = [
+    { x: 50, w: 60, h: 180 }, { x: 130, w: 40, h: 240 }, { x: 190, w: 80, h: 160 },
+    { x: 300, w: 50, h: 280 }, { x: 370, w: 70, h: 200 }, { x: 460, w: 45, h: 320 },
+    { x: 520, w: 90, h: 190 }, { x: 640, w: 55, h: 260 }, { x: 720, w: 80, h: 220 },
+    { x: 830, w: 60, h: 300 }, { x: 910, w: 70, h: 170 }, { x: 1000, w: 50, h: 250 },
+    { x: 1070, w: 85, h: 210 }, { x: 1170, w: 45, h: 290 },
+  ];
+  for (const b of buildings) {
+    const baseY = FLOOR_Y - 30;
+    const grad = ctx.createLinearGradient(0, baseY - b.h, 0, baseY);
+    grad.addColorStop(0, '#1a0a3a');
+    grad.addColorStop(1, '#0a0520');
+    ctx.fillStyle = grad;
+    ctx.fillRect(b.x, baseY - b.h, b.w, b.h);
+    // Window lights
+    ctx.fillStyle = '#2244aa';
+    for (let wy = baseY - b.h + 15; wy < baseY - 10; wy += 18) {
+      for (let wx = b.x + 6; wx < b.x + b.w - 6; wx += 12) {
+        if (Math.random() > 0.4) {
+          ctx.fillStyle = Math.random() > 0.5 ? '#2244aa55' : '#44226655';
+          ctx.fillRect(wx, wy, 5, 6);
+        }
+      }
+    }
+    // Neon accent line at top
+    ctx.strokeStyle = Math.random() > 0.5 ? '#00f0ff22' : '#ff440022';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(b.x, baseY - b.h, b.w, b.h);
+  }
+}
+
+function drawGridFloor(camX, zoom) {
+  ctx.save();
+  // Perspective grid
+  const floorTop = FLOOR_Y;
+  const floorBot = VH + 50;
+  const gridSpacing = 60;
+
+  // Horizontal lines with perspective fade
+  for (let y = floorTop; y < floorBot; y += 12) {
+    const t = (y - floorTop) / (floorBot - floorTop);
+    ctx.strokeStyle = `rgba(0,180,255,${0.08 + t * 0.12})`;
+    ctx.lineWidth = 0.5 + t;
+    ctx.beginPath();
+    ctx.moveTo(-100, y);
+    ctx.lineTo(VW + 100, y);
+    ctx.stroke();
+  }
+
+  // Vertical lines
+  const offset = (camX * 0.5) % gridSpacing;
+  for (let x = -gridSpacing; x < VW + gridSpacing * 2; x += gridSpacing) {
+    const sx = x - offset;
+    ctx.strokeStyle = 'rgba(0,180,255,0.1)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(sx, floorTop);
+    ctx.lineTo(sx + (sx - VW/2) * 0.5, floorBot);
+    ctx.stroke();
+  }
+
+  // Glow line at floor level
+  ctx.shadowBlur = 20;
+  ctx.shadowColor = '#00aaff';
+  ctx.strokeStyle = '#00bbff44';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-100, floorTop);
+  ctx.lineTo(VW + 100, floorTop);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  ctx.restore();
+}
+
+function drawStagePillars() {
+  for (const px of [STAGE_L - 15, STAGE_R + 15]) {
+    const grad = ctx.createLinearGradient(0, FLOOR_Y - 300, 0, FLOOR_Y);
+    grad.addColorStop(0, '#00f0ff00');
+    grad.addColorStop(0.5, '#00f0ff18');
+    grad.addColorStop(1, '#00f0ff33');
+    ctx.fillStyle = grad;
+    ctx.fillRect(px - 3, FLOOR_Y - 300, 6, 300);
+    // Base glow
+    ctx.beginPath();
+    ctx.arc(px, FLOOR_Y, 12, 0, Math.PI * 2);
+    ctx.fillStyle = '#00f0ff22';
+    ctx.fill();
+  }
+}
+
+// ═══════════════════════════════════════
+//  RENDERING — CHARACTER
+// ═══════════════════════════════════════
+function drawCharacter(c) {
+  const { x, y, facing: f, state, animTimer, animDuration, isNova,
+          primary, secondary, accent, dark, bodyW, bodyH, headR } = c;
+  const progress = clamp(animTimer / Math.max(animDuration, 1), 0, 1);
+
+  ctx.save();
+  ctx.translate(x, y);
+
+  // Crouch offset
+  let crouchOff = 0;
+  if (state === 'crouch' || state === 'special1' || state === 'special2') crouchOff = bodyH * 0.3;
+  if (state === 'hit') crouchOff = 5;
+
+  // Torso lean
+  let lean = 0;
+  if (state === 'punch' && progress < 0.5) lean = f * 4;
+  if (state === 'punch' && progress >= 0.5) lean = f * -2;
+  if (state === 'kick') lean = f * -3;
+  if (state === 'hit') lean = -f * 6;
+
+  // === LEGS ===
+  const legLen = isNova ? 48 : 42;
+  const legW = isNova ? 9 : 14;
+  ctx.lineCap = 'round';
+
+  // Back leg
+  let blegX = f * -12, blegY = 0;
+  if (state === 'walk') { blegX = f * -12 + Math.sin(animTimer * 0.3) * 10; }
+  if (state === 'crouch') { blegX = f * -18; blegY = crouchOff; }
+  ctx.strokeStyle = dark;
+  ctx.lineWidth = legW + 2;
+  ctx.beginPath();
+  ctx.moveTo(blegX * 0.3, -crouchOff);
+  ctx.lineTo(blegX, blegY);
+  ctx.stroke();
+  ctx.strokeStyle = secondary;
+  ctx.lineWidth = legW;
+  ctx.beginPath();
+  ctx.moveTo(blegX * 0.3, -crouchOff);
+  ctx.lineTo(blegX, blegY);
+  ctx.stroke();
+
+  // Front leg
+  let flegX = f * 12, flegY = 0;
+  if (state === 'walk') { flegX = f * 12 - Math.sin(animTimer * 0.3) * 10; }
+  if (state === 'crouch') { flegX = f * 18; flegY = crouchOff; }
+  if (state === 'kick') {
+    if (progress > 0.25 && progress < 0.65) {
+      const kp = (progress - 0.25) / 0.4;
+      flegX = f * (20 + 65 * Math.sin(kp * Math.PI));
+      flegY = -15 - 15 * Math.sin(kp * Math.PI);
+    }
+  }
+  if (state === 'special2') {
+    if (c.isNova) {
+      if (progress > 0.3 && progress < 0.65) {
+        const kp = (progress - 0.3) / 0.35;
+        flegX = f * (25 + 80 * Math.sin(kp * Math.PI));
+        flegY = -20 * Math.sin(kp * Math.PI);
+      }
+    }
+  }
+
+  ctx.strokeStyle = dark;
+  ctx.lineWidth = legW + 2;
+  ctx.beginPath();
+  ctx.moveTo(flegX * 0.3, -crouchOff);
+  ctx.lineTo(flegX, flegY);
+  ctx.stroke();
+  ctx.strokeStyle = primary;
+  ctx.lineWidth = legW;
+  ctx.beginPath();
+  ctx.moveTo(flegX * 0.3, -crouchOff);
+  ctx.lineTo(flegX, flegY);
+  ctx.stroke();
+
+  // === BODY / TORSO ===
+  const torsoH = bodyH - legLen - headR * 2;
+  const torsoTop = -(torsoH + legLen - crouchOff) + lean;
+  const torsoBot = -legLen + crouchOff * 0.3;
+
+  // Body shape
+  ctx.shadowBlur = 15;
+  ctx.shadowColor = primary;
+  ctx.fillStyle = dark;
+  ctx.beginPath();
+  if (isNova) {
+    // Sleek, tapered
+    ctx.moveTo(-bodyW/2 + 4, torsoBot);
+    ctx.lineTo(-bodyW/2 + 2, torsoTop + 5);
+    ctx.quadraticCurveTo(0, torsoTop - 3, bodyW/2 - 2, torsoTop + 5);
+    ctx.lineTo(bodyW/2 - 4, torsoBot);
+    ctx.closePath();
+  } else {
+    // Broad, armored
+    ctx.moveTo(-bodyW/2, torsoBot + 3);
+    ctx.lineTo(-bodyW/2 - 3, torsoTop + 8);
+    ctx.lineTo(-bodyW/2 + 5, torsoTop);
+    ctx.lineTo(bodyW/2 - 5, torsoTop);
+    ctx.lineTo(bodyW/2 + 3, torsoTop + 8);
+    ctx.lineTo(bodyW/2, torsoBot + 3);
+    ctx.closePath();
+  }
+  ctx.fill();
+
+  // Neon edge lines
+  ctx.strokeStyle = primary;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Center accent line
+  ctx.strokeStyle = accent + '66';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, torsoTop + 8);
+  ctx.lineTo(0, torsoBot - 5);
+  ctx.stroke();
+
+  // Chest panel / reactor glow
+  ctx.beginPath();
+  ctx.arc(0, (torsoTop + torsoBot) / 2, isNova ? 5 : 8, 0, Math.PI * 2);
+  ctx.fillStyle = primary;
+  ctx.shadowBlur = 20;
+  ctx.shadowColor = primary;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  // === ARMS ===
+  const shoulderY = torsoTop + 10;
+  const armLen = isNova ? 50 : 42;
+  const armW = isNova ? 7 : 12;
+
+  // Back arm
+  let baX = f * -25, baY = shoulderY + 25;
+  if (state === 'block') { baX = f * -10; baY = shoulderY + 10; }
+  ctx.strokeStyle = secondary;
+  ctx.lineWidth = armW;
+  ctx.beginPath();
+  ctx.moveTo(f * -bodyW/2 * 0.5, shoulderY);
+  ctx.lineTo(baX, baY);
+  ctx.stroke();
+
+  // Front arm
+  let faX = f * 20, faY = shoulderY + 20;
+  if (state === 'punch') {
+    if (progress < 0.3) {
+      faX = f * lerp(20, -10, progress / 0.3);
+      faY = shoulderY + lerp(20, 5, progress / 0.3);
+    } else if (progress < 0.55) {
+      const p = (progress - 0.3) / 0.25;
+      faX = f * lerp(-10, armLen + 35, ease(p));
+      faY = shoulderY + lerp(5, -2, p);
+    } else {
+      const p = (progress - 0.55) / 0.45;
+      faX = f * lerp(armLen + 35, 20, p);
+      faY = shoulderY + lerp(-2, 20, p);
+    }
+  }
+  if (state === 'block') {
+    faX = f * 12; faY = shoulderY + 5;
+  }
+  if (state === 'special1' && !c.isNova) {
+    // Titan ground slam
+    if (progress > 0.3 && progress < 0.6) {
+      const p = (progress - 0.3) / 0.3;
+      faX = f * lerp(20, 40, p);
+      faY = shoulderY + lerp(20, 55 + crouchOff, ease(p));
+    }
+  }
+  if (state === 'special1' && c.isNova) {
+    // Nova plasma bolt charge
+    if (progress > 0.2 && progress < 0.45) {
+      const p = (progress - 0.2) / 0.25;
+      faX = f * lerp(20, armLen + 25, ease(p));
+      faY = shoulderY + lerp(20, 0, p);
+    }
+  }
+  if (state === 'special2' && !c.isNova) {
+    // Titan rocket upper
+    if (progress > 0.25 && progress < 0.6) {
+      const p = (progress - 0.25) / 0.35;
+      faX = f * lerp(20, 15, p);
+      faY = shoulderY + lerp(20, -armLen - 20, ease(p));
+    }
+  }
+  if (state === 'hit') {
+    faX = -f * 15; faY = shoulderY + 30;
+  }
+
+  ctx.strokeStyle = primary;
+  ctx.lineWidth = armW;
+  ctx.shadowBlur = 8;
+  ctx.shadowColor = primary;
+  ctx.beginPath();
+  ctx.moveTo(f * bodyW/2 * 0.5, shoulderY);
+  ctx.lineTo(faX, faY);
+  ctx.stroke();
+
+  // Fist glow on punch
+  if (state === 'punch' && progress > 0.2 && progress < 0.6) {
+    ctx.beginPath();
+    ctx.arc(faX, faY, isNova ? 8 : 12, 0, Math.PI * 2);
+    ctx.fillStyle = primary;
+    ctx.shadowBlur = 25;
+    ctx.fill();
+  }
+  ctx.shadowBlur = 0;
+
+  // === HEAD ===
+  const headY = torsoTop - headR + lean * 0.5;
+
+  // Helmet
+  ctx.beginPath();
+  if (isNova) {
+    // Sleek oval
+    ctx.ellipse(0, headY, headR * 0.85, headR, 0, 0, Math.PI * 2);
+  } else {
+    // Angular, wider
+    ctx.moveTo(-headR, headY + 2);
+    ctx.lineTo(-headR + 3, headY - headR + 2);
+    ctx.lineTo(headR - 3, headY - headR + 2);
+    ctx.lineTo(headR, headY + 2);
+    ctx.lineTo(headR - 2, headY + headR - 2);
+    ctx.lineTo(-headR + 2, headY + headR - 2);
+    ctx.closePath();
+  }
+  ctx.fillStyle = dark;
+  ctx.strokeStyle = primary;
+  ctx.lineWidth = 2;
+  ctx.fill();
+  ctx.stroke();
+
+  // Visor
+  ctx.shadowBlur = 12;
+  ctx.shadowColor = primary;
+  ctx.strokeStyle = primary;
+  ctx.lineWidth = isNova ? 2.5 : 3;
+  ctx.beginPath();
+  if (isNova) {
+    // Thin visor line
+    ctx.moveTo(-headR * 0.65, headY - 1);
+    ctx.lineTo(headR * 0.65, headY - 1);
+  } else {
+    // Wide visor
+    ctx.moveTo(-headR * 0.75, headY - 2);
+    ctx.lineTo(headR * 0.75, headY - 2);
+    ctx.lineTo(headR * 0.6, headY + 3);
+    ctx.lineTo(-headR * 0.6, headY + 3);
+    ctx.closePath();
+    ctx.fillStyle = primary + '44';
+    ctx.fill();
+  }
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // === KO SPECIFIC ===
+  if (state === 'ko' && progress > 0.3) {
+    ctx.globalAlpha = 0.5 + Math.sin(animTimer * 0.5) * 0.3;
+    // Sparking effect
+    for (let i = 0; i < 3; i++) {
+      const sx = rand(-bodyW/2, bodyW/2);
+      const sy = rand(torsoTop, 0);
+      ctx.beginPath();
+      ctx.arc(sx, sy, rand(1, 4), 0, Math.PI * 2);
+      ctx.fillStyle = primary;
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = '#ffffff';
+      ctx.fill();
+    }
+    ctx.shadowBlur = 0;
+  }
+
+  ctx.restore();
+
+  // === SPECIAL EFFECTS ===
+  // Seismic slam ground wave (Titan special1)
+  if (!c.isNova && state === 'special1' && progress > 0.4 && progress < 0.8) {
+    const wp = (progress - 0.4) / 0.4;
+    const waveR = wp * 160;
+    ctx.save();
+    ctx.globalAlpha = 1 - wp;
+    ctx.strokeStyle = c.primary;
+    ctx.lineWidth = 4;
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = c.primary;
+    ctx.beginPath();
+    ctx.ellipse(x, y, waveR, 15, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Neon blade trail (Nova special2)
+  if (c.isNova && state === 'special2' && progress > 0.3 && progress < 0.65) {
+    const tp = (progress - 0.3) / 0.35;
+    ctx.save();
+    ctx.globalAlpha = 0.7 * (1 - tp * 0.5);
+    ctx.strokeStyle = '#00f0ff';
+    ctx.lineWidth = 3;
+    ctx.shadowBlur = 25;
+    ctx.shadowColor = '#00f0ff';
+    const bladeLen = 80 * Math.sin(tp * Math.PI);
+    ctx.beginPath();
+    ctx.moveTo(x + f * 20, y - bodyH * 0.3);
+    ctx.lineTo(x + f * (20 + bladeLen), y - bodyH * 0.3 - 10);
+    ctx.stroke();
+    // Extra glow arc
+    ctx.beginPath();
+    ctx.arc(x + f * (20 + bladeLen * 0.7), y - bodyH * 0.3, bladeLen * 0.4, 0, Math.PI * 2);
+    ctx.fillStyle = '#00f0ff11';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Rocket uppercut trail (Titan special2)
+  if (!c.isNova && state === 'special2' && progress > 0.3 && progress < 0.65) {
+    ctx.save();
+    const tp = (progress - 0.3) / 0.35;
+    for (let i = 0; i < 5; i++) {
+      const t = tp - i * 0.04;
+      if (t < 0) continue;
+      ctx.globalAlpha = 0.3 * (1 - i * 0.18);
+      ctx.beginPath();
+      ctx.arc(x + rand(-5,5), y + i * 15, 10 - i * 1.5, 0, Math.PI * 2);
+      ctx.fillStyle = i % 2 === 0 ? '#ff4400' : '#ff8800';
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
+// ═══════════════════════════════════════
+//  RENDERING — PROJECTILES
+// ═══════════════════════════════════════
+function drawProjectiles() {
+  for (const p of projectiles) {
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    // Core
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = p.color;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 18, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Inner bright
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 8, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Trail
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = p.color;
+    for (let i = 1; i < 5; i++) {
+      ctx.beginPath();
+      ctx.ellipse(-p.vx * i * 1.5, 0, 12 - i * 2, 5 - i, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // Spawn trail particles
+    if (Math.random() > 0.6) {
+      spawnParticle(p.x - p.vx + rand(-5,5), p.y + rand(-5,5),
+        -p.vx * 0.2 + rand(-1,1), rand(-1,1), p.color, 10, rand(1,3), 6);
+    }
+  }
+}
+
+// ═══════════════════════════════════════
+//  RENDERING — PARTICLES
+// ═══════════════════════════════════════
+function drawParticles() {
+  for (const p of particles) {
+    const alpha = p.life / p.maxLife;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.shadowBlur = p.glow;
+    ctx.shadowColor = p.color;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * alpha, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ═══════════════════════════════════════
+//  RENDERING — HUD
+// ═══════════════════════════════════════
+function drawHUD(p1, p2, timer, roundNum) {
+  ctx.save();
+  // Reset transform to screen space
+  ctx.setTransform(scale, 0, 0, scale, offX, offY);
+
+  const barW = 380, barH = 28, barY = 32, gap = 50;
+  const centerX = VW / 2;
+
+  // Health bars background
+  ctx.fillStyle = '#111122';
+  ctx.strokeStyle = '#334466';
+  ctx.lineWidth = 2;
+
+  // P1 bar (left, fills right to left)
+  const p1barX = centerX - gap - barW;
+  ctx.fillRect(p1barX, barY, barW, barH);
+  ctx.strokeRect(p1barX, barY, barW, barH);
+
+  // P2 bar (right, fills left to right)
+  const p2barX = centerX + gap;
+  ctx.fillRect(p2barX, barY, barW, barH);
+  ctx.strokeRect(p2barX, barY, barW, barH);
+
+  // P1 health fill (depletes from left)
+  const p1fill = clamp(p1.displayHP / p1.maxHP, 0, 1);
+  if (p1fill > 0) {
+    const grad1 = ctx.createLinearGradient(p1barX, 0, p1barX + barW, 0);
+    grad1.addColorStop(0, '#003366');
+    grad1.addColorStop(0.5, '#00ccff');
+    grad1.addColorStop(1, '#00f0ff');
+    ctx.fillStyle = grad1;
+    ctx.fillRect(p1barX + barW * (1 - p1fill), barY + 2, barW * p1fill - 2, barH - 4);
+    // Bright edge
+    ctx.fillStyle = '#ffffff44';
+    ctx.fillRect(p1barX + barW * (1 - p1fill), barY + 2, 3, barH - 4);
+  }
+
+  // P2 health fill (depletes from right)
+  const p2fill = clamp(p2.displayHP / p2.maxHP, 0, 1);
+  if (p2fill > 0) {
+    const grad2 = ctx.createLinearGradient(p2barX, 0, p2barX + barW, 0);
+    grad2.addColorStop(0, '#ff4400');
+    grad2.addColorStop(0.5, '#ff6600');
+    grad2.addColorStop(1, '#441100');
+    ctx.fillStyle = grad2;
+    ctx.fillRect(p2barX + 2, barY + 2, barW * p2fill - 2, barH - 4);
+    ctx.fillStyle = '#ffffff44';
+    ctx.fillRect(p2barX + barW * p2fill - 3, barY + 2, 3, barH - 4);
+  }
+
+  // Character names
+  ctx.font = 'bold 16px "Segoe UI", system-ui, sans-serif';
+  ctx.textBaseline = 'bottom';
+  ctx.fillStyle = '#00f0ff';
+  ctx.textAlign = 'left';
+  ctx.fillText('NOVA', p1barX, barY - 4);
+  ctx.fillStyle = '#ff6600';
+  ctx.textAlign = 'right';
+  ctx.fillText('TITAN', p2barX + barW, barY - 4);
+
+  // Round indicators
+  ctx.textAlign = 'center';
+  for (let i = 0; i < WINS_NEEDED; i++) {
+    // P1 wins
+    ctx.beginPath();
+    ctx.arc(centerX - 20 - i * 18, barY + barH/2, 5, 0, Math.PI * 2);
+    ctx.fillStyle = i < p1.wins ? '#00f0ff' : '#333355';
+    ctx.shadowBlur = i < p1.wins ? 8 : 0;
+    ctx.shadowColor = '#00f0ff';
+    ctx.fill();
+
+    // P2 wins
+    ctx.beginPath();
+    ctx.arc(centerX + 20 + i * 18, barY + barH/2, 5, 0, Math.PI * 2);
+    ctx.fillStyle = i < p2.wins ? '#ff4400' : '#553333';
+    ctx.shadowBlur = i < p2.wins ? 8 : 0;
+    ctx.shadowColor = '#ff4400';
+    ctx.fill();
+  }
+  ctx.shadowBlur = 0;
+
+  // Timer
+  ctx.font = 'bold 38px "Segoe UI", system-ui, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText(String(Math.ceil(timer)).padStart(2, '0'), centerX, barY - 8);
+
+  // Round label
+  ctx.font = '12px "Segoe UI", system-ui, sans-serif';
+  ctx.fillStyle = '#667799';
+  ctx.fillText(`ROUND ${roundNum}`, centerX, barY + barH + 6);
+
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════
+//  RENDERING — TOUCH CONTROLS
+// ═══════════════════════════════════════
+function drawTouchControls() {
+  ctx.save();
+  // Draw in actual screen coordinates
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const sw = window.innerWidth, sh = window.innerHeight;
+
+  const activeSet = new Set(activeTouches.values());
+
+  for (const [name, btn] of Object.entries(TOUCH_BUTTONS)) {
+    const bx = btn.cx * sw;
+    const by = btn.cy * sh;
+    const br = btn.r * sh;
+    const isActive = activeSet.has(name);
+    const color = btn.color || '#4488bb';
+
+    ctx.beginPath();
+    ctx.arc(bx, by, br, 0, Math.PI * 2);
+    ctx.fillStyle = isActive ? color + '55' : '#11223344';
+    ctx.fill();
+    ctx.strokeStyle = isActive ? color : color + '66';
+    ctx.lineWidth = isActive ? 3 : 1.5;
+    ctx.stroke();
+
+    if (isActive) {
+      ctx.shadowBlur = 15;
+      ctx.shadowColor = color;
+      ctx.beginPath();
+      ctx.arc(bx, by, br, 0, Math.PI * 2);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
+
+    // Label
+    ctx.font = `bold ${br * 0.6}px "Segoe UI", system-ui, sans-serif`;
+    ctx.fillStyle = isActive ? '#ffffff' : '#aabbcc88';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(btn.label, bx, by);
+  }
+
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════
+//  RENDERING — OVERLAYS
+// ═══════════════════════════════════════
+function drawTitleScreen() {
+  ctx.save();
+  ctx.setTransform(scale, 0, 0, scale, offX, offY);
+
+  // Background darken
+  ctx.fillStyle = '#06060ecc';
+  ctx.fillRect(0, 0, VW, VH);
+
+  // Title
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.shadowBlur = 40;
+  ctx.shadowColor = '#00f0ff';
+  ctx.font = 'bold 90px "Segoe UI", system-ui, sans-serif';
+  ctx.fillStyle = '#00f0ff';
+  ctx.fillText('NEON', VW/2, VH/2 - 70);
+
+  ctx.shadowColor = '#ff4400';
+  ctx.fillStyle = '#ff4400';
+  ctx.fillText('CLASH', VW/2, VH/2 + 30);
+
+  ctx.shadowBlur = 0;
+  ctx.font = '22px "Segoe UI", system-ui, sans-serif';
+  ctx.fillStyle = '#667799';
+  const blink = Math.sin(Date.now() * 0.004) > 0;
+  if (blink) ctx.fillText('TAP TO FIGHT', VW/2, VH/2 + 120);
+
+  ctx.font = '14px "Segoe UI", system-ui, sans-serif';
+  ctx.fillStyle = '#445566';
+  ctx.fillText('NOVA vs TITAN  •  Best of 3 Rounds', VW/2, VH/2 + 160);
+
+  // Controls hint
+  ctx.fillStyle = '#334455';
+  ctx.font = '13px "Segoe UI", system-ui, sans-serif';
+  ctx.fillText('D-Pad: Move/Jump/Crouch  |  P: Punch  K: Kick  B: Block  |  ↓+P / ↓+K: Special', VW/2, VH - 40);
+
+  ctx.restore();
+}
+
+function drawRoundIntro(text, progress) {
+  ctx.save();
+  ctx.setTransform(scale, 0, 0, scale, offX, offY);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  const s = 0.5 + ease(Math.min(progress * 2, 1)) * 0.5;
+  const alpha = progress < 0.8 ? 1 : 1 - (progress - 0.8) / 0.2;
+
+  ctx.globalAlpha = alpha;
+  ctx.font = `bold ${64 * s}px "Segoe UI", system-ui, sans-serif`;
+  ctx.shadowBlur = 30;
+  ctx.shadowColor = '#ffffff';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(text, VW/2, VH/2);
+  ctx.shadowBlur = 0;
+
+  ctx.restore();
+}
+
+function drawMatchEnd(winner) {
+  ctx.save();
+  ctx.setTransform(scale, 0, 0, scale, offX, offY);
+
+  ctx.fillStyle = '#06060eaa';
+  ctx.fillRect(0, 0, VW, VH);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  const color = winner.isNova ? '#00f0ff' : '#ff4400';
+  ctx.shadowBlur = 30;
+  ctx.shadowColor = color;
+  ctx.font = 'bold 56px "Segoe UI", system-ui, sans-serif';
+  ctx.fillStyle = color;
+  ctx.fillText(`${winner.name} WINS`, VW/2, VH/2 - 30);
+
+  ctx.shadowBlur = 0;
+  ctx.font = '24px "Segoe UI", system-ui, sans-serif';
+  ctx.fillStyle = '#667799';
+  const blink = Math.sin(Date.now() * 0.004) > 0;
+  if (blink) ctx.fillText('TAP TO PLAY AGAIN', VW/2, VH/2 + 40);
+
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════
+//  GAME STATE MACHINE
+// ═══════════════════════════════════════
+let gameState = 'TITLE';
+let stateTimer = 0;
+let roundNum = 1;
+let roundTimer = ROUND_TIME;
+let timerAccum = 0;
+let roundText = '';
+
+let p1, p2;
+
+function initGame() {
+  p1 = createCharacter(true, 350, 1);   // Nova on left
+  p2 = createCharacter(false, 930, -1); // Titan on right
+}
+
+function startRound() {
+  resetCharacter(p1, 350, 1);
+  resetCharacter(p2, 930, -1);
+  roundTimer = ROUND_TIME;
+  timerAccum = 0;
+  projectiles.length = 0;
+  particles.length = 0;
+  hitstopTimer = 0;
+  screenShake = { x: 0, y: 0, intensity: 0 };
+  camera.x = VW/2; camera.y = VH/2; camera.zoom = 1;
+  AI.decision = 'idle'; AI.timer = 30;
+  gameState = 'INTRO';
+  stateTimer = 0;
+  roundText = `ROUND ${roundNum}`;
+}
+
+function startMatch() {
+  roundNum = 1;
+  p1.wins = 0;
+  p2.wins = 0;
+  startRound();
+}
+
+function endRound(winner) {
+  if (winner) {
+    winner.wins++;
+  }
+  gameState = 'ROUND_END';
+  stateTimer = 0;
+  if (winner) {
+    roundText = winner.isNova ? 'NOVA WINS' : 'TITAN WINS';
+  } else {
+    roundText = 'DRAW';
+  }
+}
+
+// ═══════════════════════════════════════
+//  MAIN GAME LOOP
+// ═══════════════════════════════════════
+let lastTime = 0;
+let accumulator = 0;
+const FIXED_DT = 1000 / 60;
+
+// Ambient background particles
+const bgParticles = [];
+for (let i = 0; i < 30; i++) {
+  bgParticles.push({
+    x: rand(0, VW), y: rand(0, VH),
+    vx: rand(-0.3, 0.3), vy: rand(-0.5, -0.1),
+    size: rand(1, 3), alpha: rand(0.1, 0.3),
+    color: Math.random() > 0.5 ? '#00f0ff' : '#ff440066',
+  });
+}
+
+function updateBgParticles() {
+  for (const p of bgParticles) {
+    p.x += p.vx; p.y += p.vy;
+    if (p.y < -10) { p.y = VH + 10; p.x = rand(0, VW); }
+    if (p.x < -10) p.x = VW + 10;
+    if (p.x > VW + 10) p.x = -10;
+  }
+}
+
+function drawBgParticles() {
+  for (const p of bgParticles) {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = p.alpha;
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function gameLoop(now) {
+  requestAnimationFrame(gameLoop);
+
+  const dt = Math.min(now - lastTime, 50);
+  lastTime = now;
+  accumulator += dt;
+
+  // Fixed timestep updates
+  while (accumulator >= FIXED_DT) {
+    accumulator -= FIXED_DT;
+    update();
+  }
+
+  render();
+}
+
+function update() {
+  // Detect just-pressed for attacks
+  input.punchPressed = input.punch && !prevPunch;
+  input.kickPressed = input.kick && !prevKick;
+  pollKeyboard();
+  // Re-check just-pressed after keyboard poll
+  if (!prevPunch && input.punch) input.punchPressed = true;
+  if (!prevKick && input.kick) input.kickPressed = true;
+
+  updateBgParticles();
+
+  switch (gameState) {
+    case 'TITLE':
+      // Wait for tap
+      if (input.punch || input.kick || input.block || input.up ||
+          Object.values(keys).some(v => v)) {
+        startMatch();
+      }
+      break;
+
+    case 'INTRO':
+      stateTimer++;
+      if (stateTimer > 90) {
+        gameState = 'FIGHT';
+        roundText = 'FIGHT!';
+        stateTimer = 0;
+      }
+      break;
+
+    case 'FIGHT':
+      if (hitstopTimer > 0) { hitstopTimer--; break; }
+
+      // Timer
+      timerAccum++;
+      if (timerAccum >= 60) {
+        timerAccum = 0;
+        roundTimer--;
+        if (roundTimer <= 0) {
+          roundTimer = 0;
+          // Time out — whoever has more health wins
+          if (p1.hp > p2.hp) endRound(p1);
+          else if (p2.hp > p1.hp) endRound(p2);
+          else endRound(null);
+          break;
+        }
+      }
+
+      // Fight text fade
+      if (stateTimer < 40) stateTimer++;
+
+      // Get AI input
+      const aiInput = getAIInput(p2, p1);
+
+      // Update characters
+      updateCharacter(p1, input, p2);
+      updateCharacter(p2, aiInput, p1);
+
+      // Check hitboxes — P1 attacks
+      const atkStates = ['punch','kick','air_punch','air_kick','special1','special2'];
+      if (atkStates.includes(p1.state) && !p1.hasHit) {
+        const hitbox = getHitbox(p1);
+        if (hitbox) {
+          const hurtbox = getHurtbox(p2);
+          if (rectsOverlap(hitbox, hurtbox)) {
+            p1.hasHit = true;
+            const atk = p1.attacks[p1.state];
+            applyHit(p2, atk.damage, p1.facing, p1);
+          }
+        }
+      }
+      // P2 attacks
+      if (atkStates.includes(p2.state) && !p2.hasHit) {
+        const hitbox = getHitbox(p2);
+        if (hitbox) {
+          const hurtbox = getHurtbox(p1);
+          if (rectsOverlap(hitbox, hurtbox)) {
+            p2.hasHit = true;
+            const atk = p2.attacks[p2.state];
+            applyHit(p1, atk.damage, p2.facing, p2);
+          }
+        }
+      }
+
+      // Update projectiles
+      updateProjectiles(p1, p2);
+
+      // Update particles
+      updateParticles();
+
+      // Update camera
+      updateCamera(p1, p2);
+
+      // Check KO
+      if (p1.state === 'ko' && p1.grounded && p1.animTimer > 50) {
+        endRound(p2);
+      }
+      if (p2.state === 'ko' && p2.grounded && p2.animTimer > 50) {
+        endRound(p1);
+      }
+      break;
+
+    case 'ROUND_END':
+      stateTimer++;
+      updateParticles();
+
+      if (stateTimer > 120) {
+        // Check match winner
+        if (p1.wins >= WINS_NEEDED) {
+          gameState = 'MATCH_END'; stateTimer = 0;
+        } else if (p2.wins >= WINS_NEEDED) {
+          gameState = 'MATCH_END'; stateTimer = 0;
+        } else {
+          roundNum++;
+          startRound();
+        }
+      }
+      break;
+
+    case 'MATCH_END':
+      stateTimer++;
+      if (stateTimer > 60 && (input.punch || input.kick || input.block ||
+          Object.values(keys).some(v => v))) {
+        gameState = 'TITLE';
+      }
+      break;
+  }
+
+  prevPunch = input.punch;
+  prevKick = input.kick;
+}
+
+function render() {
+  // Clear
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#06060e';
+  ctx.fillRect(0, 0, CW, CH);
+
+  if (gameState === 'TITLE') {
+    // Draw background at default position
+    ctx.setTransform(scale, 0, 0, scale, offX, offY);
+    drawBackground(VW/2, VH/2, 1);
+    drawBgParticles();
+    // Title characters posed
+    drawCharacter(createPoseChar(true, 380, FLOOR_Y, 1, 'idle', 0));
+    drawCharacter(createPoseChar(false, 900, FLOOR_Y, -1, 'idle', 0));
+    drawTitleScreen();
+    drawTouchControls();
+    return;
+  }
+
+  // Game camera transform
+  const cx = camera.x, cy = camera.y, z = camera.zoom;
+  ctx.setTransform(scale, 0, 0, scale, offX, offY);
+  ctx.save();
+  ctx.translate(VW/2 + screenShake.x, VH/2 + screenShake.y);
+  ctx.scale(z, z);
+  ctx.translate(-cx, -cy);
+
+  // Draw world
+  drawBackground(cx, cy, z);
+  drawBgParticles();
+  drawParticles();
+  drawProjectiles();
+
+  // Draw characters (back one first)
+  if (p1.x <= p2.x) {
+    drawCharacter(p1);
+    drawCharacter(p2);
+  } else {
+    drawCharacter(p2);
+    drawCharacter(p1);
+  }
+
+  ctx.restore();
+
+  // HUD (screen-space)
+  if (gameState !== 'TITLE') {
+    drawHUD(p1, p2, roundTimer, roundNum);
+  }
+
+  // Overlays
+  if (gameState === 'INTRO') {
+    const p = stateTimer / 90;
+    if (p < 0.6) {
+      drawRoundIntro(roundText, p / 0.6);
+    } else {
+      drawRoundIntro('FIGHT!', (p - 0.6) / 0.4);
+    }
+  }
+
+  if (gameState === 'FIGHT' && stateTimer < 40) {
+    drawRoundIntro('FIGHT!', stateTimer / 40);
+  }
+
+  if (gameState === 'ROUND_END') {
+    const p = Math.min(stateTimer / 60, 1);
+    drawRoundIntro(roundText, p);
+  }
+
+  if (gameState === 'MATCH_END') {
+    const winner = p1.wins >= WINS_NEEDED ? p1 : p2;
+    drawMatchEnd(winner);
+  }
+
+  // Touch controls always on top
+  drawTouchControls();
+}
+
+// Helper: create a static character object for title screen rendering
+function createPoseChar(isNova, x, y, facing, state, timer) {
+  const c = createCharacter(isNova, x, facing);
+  c.y = y;
+  c.state = state;
+  c.animTimer = timer;
+  c.animDuration = 999;
+  return c;
+}
+
+// ═══════════════════════════════════════
+//  INITIALIZATION
+// ═══════════════════════════════════════
+initGame();
+
+// Prevent default touch behaviors globally
+document.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+
+// Animate idle characters on title
+setInterval(() => {
+  // Keep background particles moving even on title
+}, 16);
+
+// Start game loop
+requestAnimationFrame(gameLoop);
+
+// ═══════════════════════════════════════
+//  PWA SERVICE WORKER REGISTRATION
+// ═══════════════════════════════════════
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
+}
+
+// Generate icons dynamically
+function generateIcon(size) {
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const x = c.getContext('2d');
+  // Background
+  x.fillStyle = '#06060e';
+  x.fillRect(0, 0, size, size);
+  // N
+  x.font = `bold ${size * 0.35}px "Segoe UI", system-ui, sans-serif`;
+  x.textAlign = 'center';
+  x.textBaseline = 'middle';
+  x.shadowBlur = size * 0.08;
+  x.shadowColor = '#00f0ff';
+  x.fillStyle = '#00f0ff';
+  x.fillText('N', size * 0.35, size * 0.48);
+  // C
+  x.shadowColor = '#ff4400';
+  x.fillStyle = '#ff4400';
+  x.fillText('C', size * 0.65, size * 0.48);
+  // Border glow
+  x.shadowBlur = size * 0.04;
+  x.shadowColor = '#00f0ff';
+  x.strokeStyle = '#00f0ff44';
+  x.lineWidth = 2;
+  x.strokeRect(4, 4, size - 8, size - 8);
+  return c.toDataURL('image/png');
+}
+
+// Set apple-touch-icon dynamically
+const iconLink = document.querySelector('link[rel="apple-touch-icon"]');
+if (iconLink) iconLink.href = generateIcon(180);
+
+</script>
+</body>
+</html>
