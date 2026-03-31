@@ -93,7 +93,8 @@ function rectsOverlap(a, b) {
 // ═══════════════════════════════════════
 const input = { left:false, right:false, up:false, down:false,
   punch:false, kick:false, block:false,
-  punchPressed:false, kickPressed:false };
+  punchPressed:false, kickPressed:false,
+  punchBuffer:0, kickBuffer:0 };
 let prevPunch = false, prevKick = false;
 
 // Touch button definitions — positions are fractions of screen size
@@ -142,6 +143,10 @@ canvas.addEventListener('touchstart', e => {
   for (const t of e.changedTouches) {
     const btn = getTouchButton(t.clientX, t.clientY);
     activeTouches.set(t.identifier, btn);
+    // Queue tap directly — this catches rapid taps that the game loop
+    // would otherwise miss (touchend+touchstart between frames)
+    if (btn === 'punch') input.punchBuffer = 8;
+    if (btn === 'kick') input.kickBuffer = 8;
   }
   updateInputFromTouches();
 }, { passive: false });
@@ -292,68 +297,68 @@ function createCharacter(isNova, startX, facing) {
         damage: isNova ? 55 : 75,
         range: isNova ? 80 : 70,
         duration: isNova ? 16 : 20,
-        activeStart: isNova ? 4 : 6,
-        activeEnd: isNova ? 8 : 11,
+        activeStart: isNova ? 3 : 5,
+        activeEnd: isNova ? 10 : 13,
         knockback: isNova ? 5 : 8,
-        hitboxW: isNova ? 60 : 55,
-        hitboxH: 40,
-        hitboxOY: -60,
+        hitboxW: isNova ? 75 : 70,
+        hitboxH: 55,
+        hitboxOY: -70,
       },
       kick: {
         damage: isNova ? 75 : 95,
         range: isNova ? 100 : 90,
         duration: isNova ? 22 : 26,
-        activeStart: isNova ? 7 : 9,
-        activeEnd: isNova ? 13 : 16,
+        activeStart: isNova ? 5 : 7,
+        activeEnd: isNova ? 15 : 18,
         knockback: isNova ? 7 : 10,
-        hitboxW: isNova ? 80 : 70,
-        hitboxH: 35,
-        hitboxOY: -30,
+        hitboxW: isNova ? 95 : 85,
+        hitboxH: 50,
+        hitboxOY: -40,
       },
       air_punch: {
         damage: isNova ? 50 : 70,
         range: isNova ? 70 : 60,
         duration: 14,
-        activeStart: 3,
-        activeEnd: 8,
+        activeStart: 2,
+        activeEnd: 10,
         knockback: 4,
-        hitboxW: 55,
-        hitboxH: 50,
-        hitboxOY: -50,
+        hitboxW: 70,
+        hitboxH: 60,
+        hitboxOY: -55,
       },
       air_kick: {
         damage: isNova ? 70 : 85,
         range: isNova ? 90 : 80,
         duration: 18,
-        activeStart: 5,
-        activeEnd: 11,
+        activeStart: 4,
+        activeEnd: 13,
         knockback: 6,
-        hitboxW: 70,
-        hitboxH: 45,
-        hitboxOY: -40,
+        hitboxW: 85,
+        hitboxH: 55,
+        hitboxOY: -45,
       },
       special1: {
         damage: isNova ? 100 : 120,
         range: isNova ? 900 : 180,
         duration: isNova ? 28 : 32,
-        activeStart: isNova ? 12 : 14,
-        activeEnd: isNova ? 14 : 20,
+        activeStart: isNova ? 10 : 12,
+        activeEnd: isNova ? 16 : 22,
         knockback: isNova ? 3 : 12,
-        hitboxW: isNova ? 30 : 160,
-        hitboxH: isNova ? 20 : 50,
-        hitboxOY: isNova ? -55 : -20,
+        hitboxW: isNova ? 40 : 180,
+        hitboxH: isNova ? 30 : 60,
+        hitboxOY: isNova ? -60 : -30,
         isProjectile: isNova,
       },
       special2: {
         damage: isNova ? 110 : 140,
         range: isNova ? 140 : 75,
         duration: isNova ? 24 : 30,
-        activeStart: isNova ? 8 : 10,
-        activeEnd: isNova ? 15 : 18,
+        activeStart: isNova ? 6 : 8,
+        activeEnd: isNova ? 17 : 20,
         knockback: isNova ? 10 : 14,
-        hitboxW: isNova ? 120 : 60,
-        hitboxH: isNova ? 40 : 90,
-        hitboxOY: isNova ? -30 : -80,
+        hitboxW: isNova ? 135 : 75,
+        hitboxH: isNova ? 55 : 100,
+        hitboxOY: isNova ? -40 : -90,
       },
     },
     // Round record
@@ -367,7 +372,9 @@ function createCharacter(isNova, startX, facing) {
 function getHurtbox(c) {
   const crouch = (c.state === 'crouch' || c.state === 'special1' || c.state === 'special2') ? 0.65 : 1;
   const h = c.bodyH * crouch;
-  return { x: c.x - c.bodyW/2, y: c.y - h, w: c.bodyW, h };
+  // Hurtbox is wider than visual body for more reliable hit registration
+  const w = c.bodyW + 20;
+  return { x: c.x - w/2, y: c.y - h - 5, w, h: h + 5 };
 }
 
 function getHitbox(c) {
@@ -376,8 +383,9 @@ function getHitbox(c) {
   if (c.animTimer < atk.activeStart || c.animTimer > atk.activeEnd) return null;
   if (c.hasHit) return null;
   const fx = c.facing;
+  // Start hitbox slightly behind character center for close-range reliability
   return {
-    x: c.x + (fx > 0 ? 10 : -10 - atk.hitboxW),
+    x: c.x + (fx > 0 ? -5 : 5 - atk.hitboxW),
     y: c.y + atk.hitboxOY,
     w: atk.hitboxW,
     h: atk.hitboxH,
@@ -392,7 +400,11 @@ function startAttack(c, attackName) {
   c.animDuration = atk.duration;
   c.canAct = false;
   c.hasHit = false;
-  // Projectile special — spawn projectile at the right frame (handled in update)
+  // Consume input buffer so the attack doesn't double-fire
+  input.punchBuffer = 0;
+  input.kickBuffer = 0;
+  input.punchPressed = false;
+  input.kickPressed = false;
 }
 
 function resetCharacter(c, startX, facing) {
@@ -2217,13 +2229,18 @@ function gameLoop(now) {
 }
 
 function update() {
-  // Detect just-pressed for attacks
-  input.punchPressed = input.punch && !prevPunch;
-  input.kickPressed = input.kick && !prevKick;
+  // Input buffer: holds attack intent for 8 frames so rapid taps and
+  // mid-recovery inputs aren't lost
+  const BUFFER = 8;
+  if (input.punch && !prevPunch) input.punchBuffer = BUFFER;
+  if (input.kick && !prevKick) input.kickBuffer = BUFFER;
   pollKeyboard();
-  // Re-check just-pressed after keyboard poll
-  if (!prevPunch && input.punch) input.punchPressed = true;
-  if (!prevKick && input.kick) input.kickPressed = true;
+  if (!prevPunch && input.punch) input.punchBuffer = BUFFER;
+  if (!prevKick && input.kick) input.kickBuffer = BUFFER;
+  input.punchPressed = input.punchBuffer > 0;
+  input.kickPressed = input.kickBuffer > 0;
+  if (input.punchBuffer > 0) input.punchBuffer--;
+  if (input.kickBuffer > 0) input.kickBuffer--;
 
   updateBgParticles();
 
