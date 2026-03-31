@@ -770,118 +770,307 @@ function updateCamera(p1, p2) {
 // ═══════════════════════════════════════
 //  RENDERING — BACKGROUND
 // ═══════════════════════════════════════
-function drawBackground(camX, camY, zoom) {
-  // Sky gradient
-  const skyGrad = ctx.createLinearGradient(0, 0, 0, VH);
-  skyGrad.addColorStop(0, '#04040c');
-  skyGrad.addColorStop(0.5, '#0a0a2e');
-  skyGrad.addColorStop(1, '#0d1030');
-  ctx.fillStyle = skyGrad;
-  ctx.fillRect(-200, -200, VW + 400, VH + 400);
 
-  // Distant neon city skyline
-  ctx.save();
-  const parallax = -camX * 0.1;
-  ctx.translate(parallax, 0);
-  ctx.globalAlpha = 0.4;
-  drawCitySkyline();
-  ctx.restore();
-
-  // Grid floor (Tron-style)
-  drawGridFloor(camX, zoom);
-
-  // Stage edge pillars
-  drawStagePillars();
-}
-
-function drawCitySkyline() {
-  const buildings = [
-    { x: 50, w: 60, h: 180 }, { x: 130, w: 40, h: 240 }, { x: 190, w: 80, h: 160 },
-    { x: 300, w: 50, h: 280 }, { x: 370, w: 70, h: 200 }, { x: 460, w: 45, h: 320 },
-    { x: 520, w: 90, h: 190 }, { x: 640, w: 55, h: 260 }, { x: 720, w: 80, h: 220 },
-    { x: 830, w: 60, h: 300 }, { x: 910, w: 70, h: 170 }, { x: 1000, w: 50, h: 250 },
-    { x: 1070, w: 85, h: 210 }, { x: 1170, w: 45, h: 290 },
-  ];
-  for (const b of buildings) {
+// Pre-generate stable random window data to avoid flicker
+const _buildingsSeed = [];
+const _buildingsData = [
+  { x: -30, w: 65, h: 140 }, { x: 50, w: 55, h: 200 }, { x: 120, w: 80, h: 160 },
+  { x: 220, w: 42, h: 280 }, { x: 280, w: 70, h: 220 }, { x: 370, w: 50, h: 340 },
+  { x: 435, w: 90, h: 190 }, { x: 545, w: 55, h: 300 }, { x: 615, w: 75, h: 240 },
+  { x: 710, w: 60, h: 310 }, { x: 790, w: 70, h: 175 }, { x: 875, w: 50, h: 270 },
+  { x: 945, w: 85, h: 230 }, { x: 1050, w: 45, h: 295 }, { x: 1110, w: 70, h: 200 },
+  { x: 1200, w: 55, h: 260 }, { x: 1270, w: 45, h: 180 },
+];
+// Far layer (smaller, dimmer)
+const _farBuildingsData = [
+  { x: 20, w: 35, h: 120 }, { x: 80, w: 50, h: 180 }, { x: 160, w: 30, h: 250 },
+  { x: 210, w: 60, h: 150 }, { x: 310, w: 40, h: 200 }, { x: 380, w: 55, h: 280 },
+  { x: 460, w: 35, h: 170 }, { x: 530, w: 65, h: 230 }, { x: 630, w: 40, h: 190 },
+  { x: 700, w: 50, h: 260 }, { x: 780, w: 35, h: 140 }, { x: 850, w: 60, h: 220 },
+  { x: 940, w: 40, h: 300 }, { x: 1010, w: 55, h: 170 }, { x: 1100, w: 35, h: 240 },
+  { x: 1160, w: 50, h: 190 }, { x: 1240, w: 40, h: 210 },
+];
+(function(){
+  // Generate stable window patterns
+  let s = 42;
+  const prand = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return (s % 1000) / 1000; };
+  for (const b of _buildingsData) {
+    const wins = [];
     const baseY = FLOOR_Y - 30;
-    const grad = ctx.createLinearGradient(0, baseY - b.h, 0, baseY);
-    grad.addColorStop(0, '#1a0a3a');
-    grad.addColorStop(1, '#0a0520');
-    ctx.fillStyle = grad;
-    ctx.fillRect(b.x, baseY - b.h, b.w, b.h);
-    // Window lights
-    ctx.fillStyle = '#2244aa';
-    for (let wy = baseY - b.h + 15; wy < baseY - 10; wy += 18) {
-      for (let wx = b.x + 6; wx < b.x + b.w - 6; wx += 12) {
-        if (Math.random() > 0.4) {
-          ctx.fillStyle = Math.random() > 0.5 ? '#2244aa55' : '#44226655';
-          ctx.fillRect(wx, wy, 5, 6);
-        }
+    for (let wy = baseY - b.h + 12; wy < baseY - 8; wy += 14) {
+      for (let wx = b.x + 5; wx < b.x + b.w - 5; wx += 10) {
+        const r = prand();
+        if (r > 0.35) wins.push({ x: wx, y: wy, c: prand() > 0.6 ? 0 : prand() > 0.5 ? 1 : 2 });
       }
     }
-    // Neon accent line at top
-    ctx.strokeStyle = Math.random() > 0.5 ? '#00f0ff22' : '#ff440022';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(b.x, baseY - b.h, b.w, b.h);
+    _buildingsSeed.push(wins);
+  }
+})();
+
+function drawBackground(camX, camY, zoom) {
+  const t = Date.now() * 0.001;
+
+  // Sky gradient — deeper, more atmospheric
+  const skyGrad = ctx.createLinearGradient(0, -100, 0, VH + 100);
+  skyGrad.addColorStop(0, '#020208');
+  skyGrad.addColorStop(0.25, '#050518');
+  skyGrad.addColorStop(0.55, '#0a0830');
+  skyGrad.addColorStop(0.8, '#0e0a38');
+  skyGrad.addColorStop(1, '#100c40');
+  ctx.fillStyle = skyGrad;
+  ctx.fillRect(-400, -200, VW + 800, VH + 400);
+
+  // Nebula / atmospheric haze
+  drawNebula(t);
+
+  // Far city layer (more parallax, dimmer)
+  ctx.save();
+  ctx.translate(-camX * 0.04, 0);
+  ctx.globalAlpha = 0.2;
+  drawCityLayer(_farBuildingsData, FLOOR_Y - 10, '#0c0620', '#060310', null, 0.15);
+  ctx.restore();
+
+  // Main city skyline
+  ctx.save();
+  ctx.translate(-camX * 0.1, 0);
+  ctx.globalAlpha = 0.55;
+  drawCityLayer(_buildingsData, FLOOR_Y - 30, '#140a3a', '#0a0520', _buildingsSeed, 0.4);
+  ctx.restore();
+
+  // Atmospheric fog at horizon
+  const fogGrad = ctx.createLinearGradient(0, FLOOR_Y - 80, 0, FLOOR_Y + 10);
+  fogGrad.addColorStop(0, 'rgba(10,8,50,0)');
+  fogGrad.addColorStop(0.6, 'rgba(15,12,60,0.3)');
+  fogGrad.addColorStop(1, 'rgba(10,8,50,0.5)');
+  ctx.fillStyle = fogGrad;
+  ctx.fillRect(-400, FLOOR_Y - 80, VW + 800, 100);
+
+  // Grid floor (Tron-style, enhanced)
+  drawGridFloor(camX, zoom, t);
+
+  // Stage edge pillars
+  drawStagePillars(t);
+
+  // Foreground haze (subtle)
+  const fgFog = ctx.createLinearGradient(0, FLOOR_Y + 20, 0, VH + 50);
+  fgFog.addColorStop(0, 'rgba(5,5,30,0)');
+  fgFog.addColorStop(1, 'rgba(5,5,30,0.6)');
+  ctx.fillStyle = fgFog;
+  ctx.fillRect(-400, FLOOR_Y + 20, VW + 800, VH);
+}
+
+function drawNebula(t) {
+  // Soft colored light patches in the sky
+  const patches = [
+    { x: 200, y: 120, r: 220, color: '20,0,80' },
+    { x: 700, y: 80, r: 280, color: '0,20,60' },
+    { x: 1100, y: 150, r: 200, color: '40,0,50' },
+    { x: 450, y: 200, r: 160, color: '0,30,50' },
+  ];
+  for (const p of patches) {
+    const drift = Math.sin(t * 0.15 + p.x * 0.01) * 15;
+    const grad = ctx.createRadialGradient(p.x + drift, p.y, 0, p.x + drift, p.y, p.r);
+    grad.addColorStop(0, `rgba(${p.color},0.08)`);
+    grad.addColorStop(0.5, `rgba(${p.color},0.03)`);
+    grad.addColorStop(1, `rgba(${p.color},0)`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(p.x - p.r, p.y - p.r, p.r * 2, p.r * 2);
   }
 }
 
-function drawGridFloor(camX, zoom) {
+function drawCityLayer(buildings, baseY, colorTop, colorBot, windowData, windowAlpha) {
+  for (let i = 0; i < buildings.length; i++) {
+    const b = buildings[i];
+    // Building body
+    const grad = ctx.createLinearGradient(0, baseY - b.h, 0, baseY);
+    grad.addColorStop(0, colorTop);
+    grad.addColorStop(1, colorBot);
+    ctx.fillStyle = grad;
+    ctx.fillRect(b.x, baseY - b.h, b.w, b.h);
+
+    // Subtle edge highlight
+    ctx.strokeStyle = 'rgba(100,80,180,0.12)';
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(b.x, baseY - b.h, b.w, b.h);
+
+    // Roof antenna / spire (every other building)
+    if (i % 3 === 0) {
+      ctx.strokeStyle = 'rgba(100,80,200,0.15)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(b.x + b.w / 2, baseY - b.h);
+      ctx.lineTo(b.x + b.w / 2, baseY - b.h - 25);
+      ctx.stroke();
+      // Blink light
+      if (Math.sin(Date.now() * 0.003 + i) > 0.3) {
+        ctx.beginPath();
+        ctx.arc(b.x + b.w / 2, baseY - b.h - 25, 2, 0, Math.PI * 2);
+        ctx.fillStyle = i % 2 === 0 ? '#ff2200' : '#00ff88';
+        ctx.fill();
+      }
+    }
+
+    // Neon sign on some buildings
+    if (i % 4 === 1 && b.h > 200) {
+      const signY = baseY - b.h * 0.6;
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(0,200,255,0.15)' : 'rgba(255,50,100,0.12)';
+      ctx.fillRect(b.x + 4, signY, b.w - 8, 8);
+    }
+
+    // Windows
+    if (windowData && windowData[i]) {
+      for (const w of windowData[i]) {
+        const colors = ['rgba(40,60,180,A)', 'rgba(60,30,120,A)', 'rgba(0,180,200,A)'];
+        ctx.fillStyle = colors[w.c].replace('A', String(windowAlpha));
+        ctx.fillRect(w.x, w.y, 4, 5);
+      }
+    }
+  }
+}
+
+function drawGridFloor(camX, zoom, t) {
   ctx.save();
-  // Perspective grid
   const floorTop = FLOOR_Y;
-  const floorBot = VH + 50;
+  const floorBot = VH + 80;
   const gridSpacing = 60;
 
+  // Floor base color
+  const floorGrad = ctx.createLinearGradient(0, floorTop, 0, floorBot);
+  floorGrad.addColorStop(0, 'rgba(8,6,35,0.9)');
+  floorGrad.addColorStop(1, 'rgba(4,3,18,1)');
+  ctx.fillStyle = floorGrad;
+  ctx.fillRect(-400, floorTop, VW + 800, floorBot - floorTop);
+
   // Horizontal lines with perspective fade
-  for (let y = floorTop; y < floorBot; y += 12) {
-    const t = (y - floorTop) / (floorBot - floorTop);
-    ctx.strokeStyle = `rgba(0,180,255,${0.08 + t * 0.12})`;
-    ctx.lineWidth = 0.5 + t;
+  for (let y = floorTop; y < floorBot; y += 10) {
+    const yt = (y - floorTop) / (floorBot - floorTop);
+    const pulse = Math.sin(t * 2 - yt * 8) * 0.02;
+    ctx.strokeStyle = `rgba(0,160,255,${0.04 + yt * 0.1 + pulse})`;
+    ctx.lineWidth = 0.4 + yt * 1.2;
     ctx.beginPath();
-    ctx.moveTo(-100, y);
-    ctx.lineTo(VW + 100, y);
+    ctx.moveTo(-400, y);
+    ctx.lineTo(VW + 400, y);
     ctx.stroke();
   }
 
-  // Vertical lines
+  // Vertical lines with perspective convergence
   const offset = (camX * 0.5) % gridSpacing;
-  for (let x = -gridSpacing; x < VW + gridSpacing * 2; x += gridSpacing) {
+  for (let x = -gridSpacing * 2; x < VW + gridSpacing * 3; x += gridSpacing) {
     const sx = x - offset;
-    ctx.strokeStyle = 'rgba(0,180,255,0.1)';
-    ctx.lineWidth = 1;
+    const centerDist = Math.abs(sx - VW / 2) / (VW / 2);
+    ctx.strokeStyle = `rgba(0,160,255,${0.06 + centerDist * 0.04})`;
+    ctx.lineWidth = 0.8;
     ctx.beginPath();
     ctx.moveTo(sx, floorTop);
-    ctx.lineTo(sx + (sx - VW/2) * 0.5, floorBot);
+    ctx.lineTo(sx + (sx - VW / 2) * 0.6, floorBot);
     ctx.stroke();
   }
 
-  // Glow line at floor level
-  ctx.shadowBlur = 20;
-  ctx.shadowColor = '#00aaff';
-  ctx.strokeStyle = '#00bbff44';
-  ctx.lineWidth = 2;
+  // Animated scan line sweeping across the floor
+  const scanX = ((t * 120) % (VW + 400)) - 200;
+  const scanGrad = ctx.createLinearGradient(scanX - 60, 0, scanX + 60, 0);
+  scanGrad.addColorStop(0, 'rgba(0,200,255,0)');
+  scanGrad.addColorStop(0.5, 'rgba(0,200,255,0.08)');
+  scanGrad.addColorStop(1, 'rgba(0,200,255,0)');
+  ctx.fillStyle = scanGrad;
+  ctx.fillRect(scanX - 60, floorTop, 120, floorBot - floorTop);
+
+  // Glowing floor line
+  ctx.shadowBlur = 25;
+  ctx.shadowColor = '#0088ff';
+  ctx.strokeStyle = '#00aaff55';
+  ctx.lineWidth = 2.5;
   ctx.beginPath();
-  ctx.moveTo(-100, floorTop);
-  ctx.lineTo(VW + 100, floorTop);
+  ctx.moveTo(-400, floorTop);
+  ctx.lineTo(VW + 400, floorTop);
+  ctx.stroke();
+  // Second brighter thin line
+  ctx.strokeStyle = '#44ddff22';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(-400, floorTop + 1);
+  ctx.lineTo(VW + 400, floorTop + 1);
   ctx.stroke();
   ctx.shadowBlur = 0;
 
+  // Hex grid accent patches near the fighters (subtle detail)
+  drawHexAccent(400, floorTop + 40, t, 0.04);
+  drawHexAccent(880, floorTop + 35, t + 2, 0.03);
+
   ctx.restore();
 }
 
-function drawStagePillars() {
-  for (const px of [STAGE_L - 15, STAGE_R + 15]) {
-    const grad = ctx.createLinearGradient(0, FLOOR_Y - 300, 0, FLOOR_Y);
-    grad.addColorStop(0, '#00f0ff00');
-    grad.addColorStop(0.5, '#00f0ff18');
-    grad.addColorStop(1, '#00f0ff33');
+function drawHexAccent(cx, cy, t, alpha) {
+  const s = 18;
+  ctx.save();
+  ctx.globalAlpha = alpha + Math.sin(t * 1.5) * 0.01;
+  ctx.strokeStyle = '#00ccff';
+  ctx.lineWidth = 0.6;
+  for (let r = 0; r < 3; r++) {
+    for (let q = -2; q <= 2; q++) {
+      const hx = cx + q * s * 1.7 + (r % 2) * s * 0.85;
+      const hy = cy + r * s * 1.5;
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = Math.PI / 3 * i - Math.PI / 6;
+        const px = hx + Math.cos(a) * s * 0.5;
+        const py = hy + Math.sin(a) * s * 0.5;
+        i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawStagePillars(t) {
+  for (let pi = 0; pi < 2; pi++) {
+    const px = pi === 0 ? STAGE_L - 15 : STAGE_R + 15;
+    const pillarH = 350;
+
+    // Main beam
+    const grad = ctx.createLinearGradient(0, FLOOR_Y - pillarH, 0, FLOOR_Y);
+    grad.addColorStop(0, 'rgba(0,200,255,0)');
+    grad.addColorStop(0.3, 'rgba(0,200,255,0.04)');
+    grad.addColorStop(0.7, 'rgba(0,200,255,0.1)');
+    grad.addColorStop(1, 'rgba(0,200,255,0.2)');
     ctx.fillStyle = grad;
-    ctx.fillRect(px - 3, FLOOR_Y - 300, 6, 300);
-    // Base glow
+    ctx.fillRect(px - 4, FLOOR_Y - pillarH, 8, pillarH);
+
+    // Inner bright core
+    const coreGrad = ctx.createLinearGradient(0, FLOOR_Y - pillarH, 0, FLOOR_Y);
+    coreGrad.addColorStop(0, 'rgba(100,220,255,0)');
+    coreGrad.addColorStop(0.5, 'rgba(100,220,255,0.05)');
+    coreGrad.addColorStop(1, 'rgba(100,220,255,0.15)');
+    ctx.fillStyle = coreGrad;
+    ctx.fillRect(px - 1.5, FLOOR_Y - pillarH, 3, pillarH);
+
+    // Ring markers along pillar
+    for (let ry = FLOOR_Y - 60; ry > FLOOR_Y - pillarH + 30; ry -= 70) {
+      const ringAlpha = 0.08 + Math.sin(t * 2 + ry * 0.05) * 0.04;
+      ctx.strokeStyle = `rgba(0,200,255,${ringAlpha})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(px - 12, ry);
+      ctx.lineTo(px + 12, ry);
+      ctx.stroke();
+    }
+
+    // Base glow pool
+    ctx.save();
+    ctx.shadowBlur = 30;
+    ctx.shadowColor = '#0088ff';
     ctx.beginPath();
-    ctx.arc(px, FLOOR_Y, 12, 0, Math.PI * 2);
-    ctx.fillStyle = '#00f0ff22';
+    ctx.ellipse(px, FLOOR_Y + 2, 20, 5, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,150,255,0.15)';
+    ctx.fill();
+    ctx.restore();
+
+    // Top cap light
+    ctx.beginPath();
+    ctx.arc(px, FLOOR_Y - pillarH, 3, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(0,220,255,${0.3 + Math.sin(t * 3 + pi) * 0.15})`;
     ctx.fill();
   }
 }
@@ -889,13 +1078,46 @@ function drawStagePillars() {
 // ═══════════════════════════════════════
 //  RENDERING — CHARACTER
 // ═══════════════════════════════════════
+
+// Helper: draw a limb segment with joint and neon trim
+function drawLimb(x1, y1, x2, y2, w, fillColor, trimColor, jointR) {
+  // Outline
+  ctx.strokeStyle = '#000000';
+  ctx.lineWidth = w + 3;
+  ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  // Fill
+  ctx.strokeStyle = fillColor;
+  ctx.lineWidth = w;
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  // Neon trim (thin bright line along center)
+  ctx.strokeStyle = trimColor;
+  ctx.lineWidth = 1.2;
+  ctx.globalAlpha = 0.6;
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  ctx.globalAlpha = 1;
+  // Joint circle
+  if (jointR > 0) {
+    ctx.beginPath();
+    ctx.arc(x2, y2, jointR, 0, Math.PI * 2);
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+    ctx.strokeStyle = trimColor;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+}
+
 function drawCharacter(c) {
   const { x, y, facing: f, state, animTimer, animDuration, isNova,
           primary, secondary, accent, dark, bodyW, bodyH, headR } = c;
   const progress = clamp(animTimer / Math.max(animDuration, 1), 0, 1);
+  const time = Date.now() * 0.001;
 
   ctx.save();
   ctx.translate(x, y);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
 
   // Crouch offset
   let crouchOff = 0;
@@ -904,315 +1126,674 @@ function drawCharacter(c) {
 
   // Torso lean
   let lean = 0;
-  if (state === 'punch' && progress < 0.5) lean = f * 4;
+  if (state === 'punch' && progress < 0.5) lean = f * 5;
   if (state === 'punch' && progress >= 0.5) lean = f * -2;
-  if (state === 'kick') lean = f * -3;
-  if (state === 'hit') lean = -f * 6;
+  if (state === 'kick') lean = f * -4;
+  if (state === 'hit') lean = -f * 7;
+  if (state === 'block') lean = -f * 2;
 
-  // === LEGS ===
-  const legLen = isNova ? 48 : 42;
-  const legW = isNova ? 9 : 14;
-  ctx.lineCap = 'round';
+  // Breathing animation
+  const breathe = Math.sin(time * 3) * 2;
+  if (state === 'idle') crouchOff -= breathe;
 
-  // Back leg
-  let blegX = f * -12, blegY = 0;
-  if (state === 'walk') { blegX = f * -12 + Math.sin(animTimer * 0.3) * 10; }
-  if (state === 'crouch') { blegX = f * -18; blegY = crouchOff; }
-  ctx.strokeStyle = dark;
-  ctx.lineWidth = legW + 2;
-  ctx.beginPath();
-  ctx.moveTo(blegX * 0.3, -crouchOff);
-  ctx.lineTo(blegX, blegY);
-  ctx.stroke();
-  ctx.strokeStyle = secondary;
-  ctx.lineWidth = legW;
-  ctx.beginPath();
-  ctx.moveTo(blegX * 0.3, -crouchOff);
-  ctx.lineTo(blegX, blegY);
-  ctx.stroke();
-
-  // Front leg
-  let flegX = f * 12, flegY = 0;
-  if (state === 'walk') { flegX = f * 12 - Math.sin(animTimer * 0.3) * 10; }
-  if (state === 'crouch') { flegX = f * 18; flegY = crouchOff; }
-  if (state === 'kick') {
-    if (progress > 0.25 && progress < 0.65) {
-      const kp = (progress - 0.25) / 0.4;
-      flegX = f * (20 + 65 * Math.sin(kp * Math.PI));
-      flegY = -15 - 15 * Math.sin(kp * Math.PI);
-    }
-  }
-  if (state === 'special2') {
-    if (c.isNova) {
-      if (progress > 0.3 && progress < 0.65) {
-        const kp = (progress - 0.3) / 0.35;
-        flegX = f * (25 + 80 * Math.sin(kp * Math.PI));
-        flegY = -20 * Math.sin(kp * Math.PI);
-      }
-    }
-  }
-
-  ctx.strokeStyle = dark;
-  ctx.lineWidth = legW + 2;
-  ctx.beginPath();
-  ctx.moveTo(flegX * 0.3, -crouchOff);
-  ctx.lineTo(flegX, flegY);
-  ctx.stroke();
-  ctx.strokeStyle = primary;
-  ctx.lineWidth = legW;
-  ctx.beginPath();
-  ctx.moveTo(flegX * 0.3, -crouchOff);
-  ctx.lineTo(flegX, flegY);
-  ctx.stroke();
-
-  // === BODY / TORSO ===
+  // === DIMENSIONS ===
+  const legLen = isNova ? 50 : 44;
   const torsoH = bodyH - legLen - headR * 2;
   const torsoTop = -(torsoH + legLen - crouchOff) + lean;
   const torsoBot = -legLen + crouchOff * 0.3;
+  const shoulderY = torsoTop + 8;
+  const hipY = torsoBot;
+  const armLen = isNova ? 48 : 40;
 
-  // Body shape
-  ctx.shadowBlur = 15;
-  ctx.shadowColor = primary;
-  ctx.fillStyle = dark;
+  // === CHARACTER SHADOW ON FLOOR ===
+  ctx.save();
+  ctx.globalAlpha = 0.25;
   ctx.beginPath();
-  if (isNova) {
-    // Sleek, tapered
-    ctx.moveTo(-bodyW/2 + 4, torsoBot);
-    ctx.lineTo(-bodyW/2 + 2, torsoTop + 5);
-    ctx.quadraticCurveTo(0, torsoTop - 3, bodyW/2 - 2, torsoTop + 5);
-    ctx.lineTo(bodyW/2 - 4, torsoBot);
-    ctx.closePath();
-  } else {
-    // Broad, armored
-    ctx.moveTo(-bodyW/2, torsoBot + 3);
-    ctx.lineTo(-bodyW/2 - 3, torsoTop + 8);
-    ctx.lineTo(-bodyW/2 + 5, torsoTop);
-    ctx.lineTo(bodyW/2 - 5, torsoTop);
-    ctx.lineTo(bodyW/2 + 3, torsoTop + 8);
-    ctx.lineTo(bodyW/2, torsoBot + 3);
-    ctx.closePath();
+  ctx.ellipse(0, 2, bodyW * 0.7, 5, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#000011';
+  ctx.fill();
+  ctx.restore();
+
+  // ════════════════════════════════════
+  //  LEGS
+  // ════════════════════════════════════
+  const legW = isNova ? 8 : 13;
+  const bootH = isNova ? 10 : 14;
+
+  // Calculate leg positions
+  let blegX = f * -14, blegY = 0, flegX = f * 14, flegY = 0;
+  let bkneeX = f * -8, bkneeY = hipY + legLen * 0.45;
+  let fkneeX = f * 8, fkneeY = hipY + legLen * 0.45;
+
+  if (state === 'walk') {
+    const ws = Math.sin(animTimer * 0.3);
+    blegX = f * -14 + ws * 14; bkneeX = f * -8 + ws * 7;
+    flegX = f * 14 - ws * 14; fkneeX = f * 8 - ws * 7;
   }
-  ctx.fill();
+  if (state === 'crouch') {
+    blegX = f * -22; blegY = crouchOff; bkneeX = f * -16; bkneeY = hipY + legLen * 0.3;
+    flegX = f * 22; flegY = crouchOff; fkneeX = f * 16; fkneeY = hipY + legLen * 0.3;
+  }
+  if (state === 'kick' && progress > 0.25 && progress < 0.65) {
+    const kp = (progress - 0.25) / 0.4;
+    const ext = Math.sin(kp * Math.PI);
+    flegX = f * (20 + 70 * ext);
+    flegY = -18 - 18 * ext;
+    fkneeX = f * (16 + 30 * ext);
+    fkneeY = hipY + legLen * 0.3 - 10 * ext;
+  }
+  if (state === 'special2' && isNova && progress > 0.3 && progress < 0.65) {
+    const kp = (progress - 0.3) / 0.35;
+    const ext = Math.sin(kp * Math.PI);
+    flegX = f * (25 + 85 * ext);
+    flegY = -22 * ext;
+    fkneeX = f * (18 + 40 * ext);
+    fkneeY = hipY + legLen * 0.25 - 12 * ext;
+  }
 
-  // Neon edge lines
+  // Back leg: thigh + shin + boot
+  const bLegFill = isNova ? '#004455' : '#3a1500';
+  drawLimb(f * -5, hipY, bkneeX, bkneeY, legW, bLegFill, secondary, isNova ? 3 : 4);
+  drawLimb(bkneeX, bkneeY, blegX, blegY, legW - 1, bLegFill, secondary, 0);
+  // Boot
+  ctx.fillStyle = isNova ? '#006677' : '#552200';
+  ctx.fillRect(blegX - legW * 0.6, blegY - 2, legW * 1.5, bootH);
   ctx.strokeStyle = primary;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  // Center accent line
-  ctx.strokeStyle = accent + '66';
   ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, torsoTop + 8);
-  ctx.lineTo(0, torsoBot - 5);
-  ctx.stroke();
+  ctx.strokeRect(blegX - legW * 0.6, blegY - 2, legW * 1.5, bootH);
 
-  // Chest panel / reactor glow
-  ctx.beginPath();
-  ctx.arc(0, (torsoTop + torsoBot) / 2, isNova ? 5 : 8, 0, Math.PI * 2);
-  ctx.fillStyle = primary;
-  ctx.shadowBlur = 20;
-  ctx.shadowColor = primary;
-  ctx.fill();
-  ctx.shadowBlur = 0;
+  // Front leg: thigh + shin + boot
+  const fLegFill = isNova ? '#005566' : '#4a1a00';
+  drawLimb(f * 5, hipY, fkneeX, fkneeY, legW + 1, fLegFill, primary, isNova ? 3.5 : 5);
+  drawLimb(fkneeX, fkneeY, flegX, flegY, legW, fLegFill, primary, 0);
+  // Boot
+  ctx.fillStyle = isNova ? '#007788' : '#662800';
+  ctx.fillRect(flegX - legW * 0.6, flegY - 2, legW * 1.5, bootH);
+  ctx.strokeStyle = primary;
+  ctx.lineWidth = 1.2;
+  ctx.strokeRect(flegX - legW * 0.6, flegY - 2, legW * 1.5, bootH);
 
-  // === ARMS ===
-  const shoulderY = torsoTop + 10;
-  const armLen = isNova ? 50 : 42;
-  const armW = isNova ? 7 : 12;
+  // ════════════════════════════════════
+  //  TORSO
+  // ════════════════════════════════════
+  ctx.save();
 
-  // Back arm
-  let baX = f * -25, baY = shoulderY + 25;
-  if (state === 'block') { baX = f * -10; baY = shoulderY + 10; }
-  ctx.strokeStyle = secondary;
-  ctx.lineWidth = armW;
-  ctx.beginPath();
-  ctx.moveTo(f * -bodyW/2 * 0.5, shoulderY);
-  ctx.lineTo(baX, baY);
-  ctx.stroke();
+  if (isNova) {
+    // ── NOVA TORSO: sleek, fitted, energy lines ──
+    // Main body
+    ctx.beginPath();
+    ctx.moveTo(-bodyW/2 + 6, torsoBot + 2);
+    ctx.lineTo(-bodyW/2 + 2, torsoTop + 10);
+    ctx.quadraticCurveTo(-bodyW/4, torsoTop - 2, 0, torsoTop);
+    ctx.quadraticCurveTo(bodyW/4, torsoTop - 2, bodyW/2 - 2, torsoTop + 10);
+    ctx.lineTo(bodyW/2 - 6, torsoBot + 2);
+    ctx.closePath();
 
-  // Front arm
-  let faX = f * 20, faY = shoulderY + 20;
+    // Dark fill with gradient
+    const tGrad = ctx.createLinearGradient(0, torsoTop, 0, torsoBot);
+    tGrad.addColorStop(0, '#002833');
+    tGrad.addColorStop(0.5, '#003d4d');
+    tGrad.addColorStop(1, '#002028');
+    ctx.fillStyle = tGrad;
+    ctx.fill();
+
+    // Edge glow
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = primary;
+    ctx.strokeStyle = primary;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Circuit-line accents
+    ctx.strokeStyle = '#00f0ff55';
+    ctx.lineWidth = 0.8;
+    // V-pattern from shoulders to center
+    ctx.beginPath();
+    ctx.moveTo(-bodyW/2 + 6, torsoTop + 12);
+    ctx.lineTo(0, (torsoTop + torsoBot) / 2 + 5);
+    ctx.lineTo(bodyW/2 - 6, torsoTop + 12);
+    ctx.stroke();
+    // Side accent lines
+    ctx.beginPath();
+    ctx.moveTo(-bodyW/2 + 4, torsoTop + 20);
+    ctx.lineTo(-bodyW/2 + 4, torsoBot - 5);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(bodyW/2 - 4, torsoTop + 20);
+    ctx.lineTo(bodyW/2 - 4, torsoBot - 5);
+    ctx.stroke();
+
+    // Central reactor core (diamond shape)
+    const coreY = (torsoTop + torsoBot) / 2;
+    ctx.save();
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = '#00f0ff';
+    ctx.fillStyle = '#00ddff';
+    ctx.beginPath();
+    ctx.moveTo(0, coreY - 6);
+    ctx.lineTo(5, coreY);
+    ctx.lineTo(0, coreY + 6);
+    ctx.lineTo(-5, coreY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(0, coreY, 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Shoulder pads (small, sleek)
+    for (const side of [-1, 1]) {
+      ctx.fillStyle = '#004455';
+      ctx.strokeStyle = primary;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.ellipse(side * bodyW/2 * 0.7, shoulderY + 2, 8, 5, side * 0.3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+  } else {
+    // ── TITAN TORSO: broad, armored, heavy plates ──
+    // Main body — wider, angular
+    ctx.beginPath();
+    ctx.moveTo(-bodyW/2 - 2, torsoBot + 4);
+    ctx.lineTo(-bodyW/2 - 5, torsoTop + 15);
+    ctx.lineTo(-bodyW/2 + 3, torsoTop + 4);
+    ctx.lineTo(-bodyW/4, torsoTop);
+    ctx.lineTo(bodyW/4, torsoTop);
+    ctx.lineTo(bodyW/2 - 3, torsoTop + 4);
+    ctx.lineTo(bodyW/2 + 5, torsoTop + 15);
+    ctx.lineTo(bodyW/2 + 2, torsoBot + 4);
+    ctx.closePath();
+
+    // Armored gradient
+    const tGrad = ctx.createLinearGradient(0, torsoTop, 0, torsoBot);
+    tGrad.addColorStop(0, '#2a1200');
+    tGrad.addColorStop(0.4, '#3a1800');
+    tGrad.addColorStop(1, '#1a0a00');
+    ctx.fillStyle = tGrad;
+    ctx.fill();
+
+    // Edge glow
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = primary;
+    ctx.strokeStyle = primary;
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Chest plate (layered armor)
+    ctx.beginPath();
+    const cpTop = torsoTop + 8;
+    const cpBot = (torsoTop + torsoBot) / 2 + 5;
+    ctx.moveTo(-bodyW/3, cpTop);
+    ctx.lineTo(bodyW/3, cpTop);
+    ctx.lineTo(bodyW/3 - 4, cpBot);
+    ctx.lineTo(0, cpBot + 6);
+    ctx.lineTo(-bodyW/3 + 4, cpBot);
+    ctx.closePath();
+    ctx.fillStyle = '#4a2000';
+    ctx.fill();
+    ctx.strokeStyle = '#ff660044';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Belt / waist armor
+    ctx.fillStyle = '#331500';
+    ctx.fillRect(-bodyW/2, torsoBot - 6, bodyW, 10);
+    ctx.strokeStyle = '#ff880044';
+    ctx.lineWidth = 0.8;
+    ctx.strokeRect(-bodyW/2, torsoBot - 6, bodyW, 10);
+
+    // Central reactor (hexagonal, orange glow)
+    const coreY = (cpTop + cpBot) / 2;
+    ctx.save();
+    ctx.shadowBlur = 22;
+    ctx.shadowColor = '#ff6600';
+    ctx.fillStyle = '#ff5500';
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = Math.PI / 3 * i - Math.PI / 6;
+      const px = Math.cos(a) * 7;
+      const py = coreY + Math.sin(a) * 7;
+      i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#ffcc44';
+    ctx.beginPath();
+    ctx.arc(0, coreY, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Vent lines on sides
+    ctx.strokeStyle = '#ff440033';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 3; i++) {
+      const vy = torsoTop + 20 + i * 10;
+      ctx.beginPath();
+      ctx.moveTo(-bodyW/2 - 2, vy);
+      ctx.lineTo(-bodyW/2 + 6, vy);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(bodyW/2 + 2, vy);
+      ctx.lineTo(bodyW/2 - 6, vy);
+      ctx.stroke();
+    }
+
+    // Shoulder armor (big, angular)
+    for (const side of [-1, 1]) {
+      ctx.save();
+      ctx.translate(side * bodyW/2 * 0.8, shoulderY);
+      ctx.fillStyle = '#3a1800';
+      ctx.strokeStyle = primary;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(side * -8, -2);
+      ctx.lineTo(side * 14, -6);
+      ctx.lineTo(side * 16, 4);
+      ctx.lineTo(side * 10, 10);
+      ctx.lineTo(side * -6, 6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      // Accent line on pad
+      ctx.strokeStyle = '#ff880044';
+      ctx.lineWidth = 0.8;
+      ctx.beginPath();
+      ctx.moveTo(side * -2, 0);
+      ctx.lineTo(side * 12, -2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+  ctx.restore();
+
+  // ════════════════════════════════════
+  //  ARMS
+  // ════════════════════════════════════
+  const armW = isNova ? 6 : 11;
+  const fistR = isNova ? 5 : 8;
+
+  // Calculate arm positions
+  let baX = f * -22, baY = shoulderY + 28;
+  let faX = f * 22, faY = shoulderY + 22;
+  let baElbowX = f * -18, baElbowY = shoulderY + 14;
+  let faElbowX = f * 16, faElbowY = shoulderY + 12;
+
+  if (state === 'block') {
+    faX = f * 14; faY = shoulderY + 6;
+    faElbowX = f * 16; faElbowY = shoulderY + 2;
+    baX = f * -8; baY = shoulderY + 8;
+    baElbowX = f * -10; baElbowY = shoulderY + 4;
+  }
   if (state === 'punch') {
     if (progress < 0.3) {
-      faX = f * lerp(20, -10, progress / 0.3);
-      faY = shoulderY + lerp(20, 5, progress / 0.3);
+      const p = progress / 0.3;
+      faElbowX = f * lerp(16, -5, p);
+      faElbowY = shoulderY + lerp(12, 5, p);
+      faX = f * lerp(22, -8, p);
+      faY = shoulderY + lerp(22, 8, p);
     } else if (progress < 0.55) {
       const p = (progress - 0.3) / 0.25;
-      faX = f * lerp(-10, armLen + 35, ease(p));
-      faY = shoulderY + lerp(5, -2, p);
+      const ep = ease(p);
+      faElbowX = f * lerp(-5, 30, ep);
+      faElbowY = shoulderY + lerp(5, -2, ep);
+      faX = f * lerp(-8, armLen + 38, ep);
+      faY = shoulderY + lerp(8, -3, ep);
     } else {
       const p = (progress - 0.55) / 0.45;
-      faX = f * lerp(armLen + 35, 20, p);
-      faY = shoulderY + lerp(-2, 20, p);
+      faElbowX = f * lerp(30, 16, p);
+      faElbowY = shoulderY + lerp(-2, 12, p);
+      faX = f * lerp(armLen + 38, 22, p);
+      faY = shoulderY + lerp(-3, 22, p);
     }
   }
-  if (state === 'block') {
-    faX = f * 12; faY = shoulderY + 5;
+  if (state === 'special1' && !isNova && progress > 0.3 && progress < 0.6) {
+    const p = (progress - 0.3) / 0.3;
+    faX = f * lerp(22, 35, p);
+    faY = shoulderY + lerp(22, 60 + crouchOff, ease(p));
+    faElbowX = f * lerp(16, 28, p);
+    faElbowY = shoulderY + lerp(12, 40, p);
   }
-  if (state === 'special1' && !c.isNova) {
-    // Titan ground slam
-    if (progress > 0.3 && progress < 0.6) {
-      const p = (progress - 0.3) / 0.3;
-      faX = f * lerp(20, 40, p);
-      faY = shoulderY + lerp(20, 55 + crouchOff, ease(p));
-    }
+  if (state === 'special1' && isNova && progress > 0.2 && progress < 0.45) {
+    const p = (progress - 0.2) / 0.25;
+    faX = f * lerp(22, armLen + 30, ease(p));
+    faY = shoulderY + lerp(22, 2, p);
+    faElbowX = f * lerp(16, armLen * 0.6, p);
+    faElbowY = shoulderY + lerp(12, 4, p);
   }
-  if (state === 'special1' && c.isNova) {
-    // Nova plasma bolt charge
-    if (progress > 0.2 && progress < 0.45) {
-      const p = (progress - 0.2) / 0.25;
-      faX = f * lerp(20, armLen + 25, ease(p));
-      faY = shoulderY + lerp(20, 0, p);
-    }
-  }
-  if (state === 'special2' && !c.isNova) {
-    // Titan rocket upper
-    if (progress > 0.25 && progress < 0.6) {
-      const p = (progress - 0.25) / 0.35;
-      faX = f * lerp(20, 15, p);
-      faY = shoulderY + lerp(20, -armLen - 20, ease(p));
-    }
+  if (state === 'special2' && !isNova && progress > 0.25 && progress < 0.6) {
+    const p = (progress - 0.25) / 0.35;
+    faX = f * lerp(22, 12, p);
+    faY = shoulderY + lerp(22, -armLen - 25, ease(p));
+    faElbowX = f * lerp(16, 10, p);
+    faElbowY = shoulderY + lerp(12, -armLen * 0.5, p);
   }
   if (state === 'hit') {
-    faX = -f * 15; faY = shoulderY + 30;
+    faX = -f * 15; faY = shoulderY + 32;
+    faElbowX = -f * 5; faElbowY = shoulderY + 20;
+    baX = -f * 20; baY = shoulderY + 35;
   }
 
-  ctx.strokeStyle = primary;
-  ctx.lineWidth = armW;
-  ctx.shadowBlur = 8;
-  ctx.shadowColor = primary;
-  ctx.beginPath();
-  ctx.moveTo(f * bodyW/2 * 0.5, shoulderY);
-  ctx.lineTo(faX, faY);
-  ctx.stroke();
+  // Back arm
+  const baFill = isNova ? '#003844' : '#2a1000';
+  drawLimb(f * -bodyW/2 * 0.5, shoulderY + 2, baElbowX, baElbowY, armW - 1, baFill, secondary, isNova ? 2.5 : 4);
+  drawLimb(baElbowX, baElbowY, baX, baY, armW - 1, baFill, secondary, fistR - 1);
 
-  // Fist glow on punch
+  // Front arm
+  const faFill = isNova ? '#004d5e' : '#3a1500';
+  drawLimb(f * bodyW/2 * 0.5, shoulderY + 2, faElbowX, faElbowY, armW, faFill, primary, isNova ? 3 : 5);
+  drawLimb(faElbowX, faElbowY, faX, faY, armW, faFill, primary, fistR);
+
+  // Fist / weapon effects
   if (state === 'punch' && progress > 0.2 && progress < 0.6) {
-    ctx.beginPath();
-    ctx.arc(faX, faY, isNova ? 8 : 12, 0, Math.PI * 2);
-    ctx.fillStyle = primary;
+    ctx.save();
     ctx.shadowBlur = 25;
+    ctx.shadowColor = primary;
+    ctx.beginPath();
+    ctx.arc(faX, faY, fistR + 4, 0, Math.PI * 2);
+    ctx.fillStyle = primary + '88';
     ctx.fill();
+    // Impact ring
+    if (progress > 0.35 && progress < 0.5) {
+      ctx.beginPath();
+      ctx.arc(faX + f * 5, faY, fistR + 8, 0, Math.PI * 2);
+      ctx.strokeStyle = primary;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+    ctx.restore();
   }
-  ctx.shadowBlur = 0;
 
-  // === HEAD ===
-  const headY = torsoTop - headR + lean * 0.5;
-
-  // Helmet
-  ctx.beginPath();
+  // Nova: energy blade on wrist (always visible, brighter during attacks)
   if (isNova) {
-    // Sleek oval
-    ctx.ellipse(0, headY, headR * 0.85, headR, 0, 0, Math.PI * 2);
-  } else {
-    // Angular, wider
-    ctx.moveTo(-headR, headY + 2);
-    ctx.lineTo(-headR + 3, headY - headR + 2);
-    ctx.lineTo(headR - 3, headY - headR + 2);
-    ctx.lineTo(headR, headY + 2);
-    ctx.lineTo(headR - 2, headY + headR - 2);
-    ctx.lineTo(-headR + 2, headY + headR - 2);
-    ctx.closePath();
+    const bladeAlpha = (state === 'punch' || state === 'special2') ? 0.8 : 0.25;
+    const bladeLen = (state === 'punch' && progress > 0.25 && progress < 0.55) ? 18 : 8;
+    ctx.save();
+    ctx.globalAlpha = bladeAlpha;
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = '#00f0ff';
+    ctx.strokeStyle = '#00f0ff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(faX, faY);
+    ctx.lineTo(faX + f * bladeLen, faY - 3);
+    ctx.stroke();
+    ctx.restore();
   }
-  ctx.fillStyle = dark;
-  ctx.strokeStyle = primary;
-  ctx.lineWidth = 2;
-  ctx.fill();
-  ctx.stroke();
 
-  // Visor
-  ctx.shadowBlur = 12;
-  ctx.shadowColor = primary;
-  ctx.strokeStyle = primary;
-  ctx.lineWidth = isNova ? 2.5 : 3;
-  ctx.beginPath();
+  // Titan: power gauntlets glow
+  if (!isNova) {
+    const gAlpha = (state === 'punch' || state === 'special1') ? 0.7 : 0.2;
+    ctx.save();
+    ctx.globalAlpha = gAlpha;
+    ctx.shadowBlur = 15;
+    ctx.shadowColor = '#ff6600';
+    ctx.beginPath();
+    ctx.arc(faX, faY, fistR + 2, 0, Math.PI * 2);
+    ctx.strokeStyle = '#ff8800';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ════════════════════════════════════
+  //  HEAD
+  // ════════════════════════════════════
+  const headY = torsoTop - headR - 2 + lean * 0.4;
+
   if (isNova) {
-    // Thin visor line
-    ctx.moveTo(-headR * 0.65, headY - 1);
-    ctx.lineTo(headR * 0.65, headY - 1);
-  } else {
-    // Wide visor
-    ctx.moveTo(-headR * 0.75, headY - 2);
-    ctx.lineTo(headR * 0.75, headY - 2);
-    ctx.lineTo(headR * 0.6, headY + 3);
-    ctx.lineTo(-headR * 0.6, headY + 3);
-    ctx.closePath();
-    ctx.fillStyle = primary + '44';
+    // ── NOVA HEAD: sleek helmet, thin V-visor, antenna ──
+    // Helmet base
+    ctx.beginPath();
+    ctx.ellipse(0, headY, headR * 0.88, headR * 1.05, 0, 0, Math.PI * 2);
+    const hGrad = ctx.createRadialGradient(0, headY - 4, 2, 0, headY, headR);
+    hGrad.addColorStop(0, '#005566');
+    hGrad.addColorStop(1, '#002833');
+    ctx.fillStyle = hGrad;
     ctx.fill();
-  }
-  ctx.stroke();
-  ctx.shadowBlur = 0;
+    ctx.strokeStyle = '#00ccdd';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
 
-  // === KO SPECIFIC ===
+    // Chin guard — slight point
+    ctx.beginPath();
+    ctx.moveTo(-6, headY + headR * 0.6);
+    ctx.lineTo(0, headY + headR * 1.1);
+    ctx.lineTo(6, headY + headR * 0.6);
+    ctx.fillStyle = '#003344';
+    ctx.fill();
+    ctx.strokeStyle = '#00bbcc88';
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+
+    // V-shaped visor
+    ctx.save();
+    ctx.shadowBlur = 14;
+    ctx.shadowColor = '#00f0ff';
+    ctx.strokeStyle = '#00f0ff';
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(-headR * 0.7, headY - 2);
+    ctx.lineTo(0, headY + 3);
+    ctx.lineTo(headR * 0.7, headY - 2);
+    ctx.stroke();
+    // Visor glow fill
+    ctx.fillStyle = '#00f0ff22';
+    ctx.fill();
+    ctx.restore();
+
+    // Top antenna / fin
+    ctx.strokeStyle = '#00ccdd88';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(0, headY - headR * 0.9);
+    ctx.lineTo(0, headY - headR * 1.5);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(0, headY - headR * 1.5, 1.5, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(0,240,255,${0.5 + Math.sin(time * 4) * 0.3})`;
+    ctx.fill();
+
+  } else {
+    // ── TITAN HEAD: blocky helmet, wide T-visor, jaw guard ──
+    // Helmet — angular, wider
+    ctx.beginPath();
+    ctx.moveTo(-headR * 0.9, headY + headR * 0.5);
+    ctx.lineTo(-headR, headY - headR * 0.3);
+    ctx.lineTo(-headR * 0.7, headY - headR * 0.9);
+    ctx.lineTo(headR * 0.7, headY - headR * 0.9);
+    ctx.lineTo(headR, headY - headR * 0.3);
+    ctx.lineTo(headR * 0.9, headY + headR * 0.5);
+    ctx.lineTo(headR * 0.6, headY + headR * 0.8);
+    ctx.lineTo(-headR * 0.6, headY + headR * 0.8);
+    ctx.closePath();
+    const hGrad = ctx.createLinearGradient(0, headY - headR, 0, headY + headR);
+    hGrad.addColorStop(0, '#3a1800');
+    hGrad.addColorStop(1, '#1a0a00');
+    ctx.fillStyle = hGrad;
+    ctx.fill();
+    ctx.strokeStyle = '#cc5500';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Jaw guard plate
+    ctx.beginPath();
+    ctx.moveTo(-headR * 0.7, headY + headR * 0.15);
+    ctx.lineTo(-headR * 0.6, headY + headR * 0.8);
+    ctx.lineTo(headR * 0.6, headY + headR * 0.8);
+    ctx.lineTo(headR * 0.7, headY + headR * 0.15);
+    ctx.closePath();
+    ctx.fillStyle = '#2a1200';
+    ctx.fill();
+    ctx.strokeStyle = '#ff660033';
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+
+    // T-shaped visor
+    ctx.save();
+    ctx.shadowBlur = 16;
+    ctx.shadowColor = '#ff4400';
+    // Horizontal bar
+    ctx.fillStyle = '#ff4400';
+    ctx.fillRect(-headR * 0.7, headY - headR * 0.35, headR * 1.4, 4);
+    // Vertical bar
+    ctx.fillRect(-2.5, headY - headR * 0.35, 5, headR * 0.5);
+    // Bright center
+    ctx.fillStyle = '#ffaa44';
+    ctx.fillRect(-headR * 0.5, headY - headR * 0.3, headR * 1.0, 2.5);
+    ctx.restore();
+
+    // Side vents on helmet
+    ctx.strokeStyle = '#ff440033';
+    ctx.lineWidth = 1;
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(side * headR * 0.85, headY - headR * 0.1);
+      ctx.lineTo(side * headR * 0.85, headY + headR * 0.2);
+      ctx.stroke();
+    }
+
+    // Forehead crest
+    ctx.strokeStyle = '#ff6600';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(-headR * 0.3, headY - headR * 0.85);
+    ctx.lineTo(0, headY - headR * 1.1);
+    ctx.lineTo(headR * 0.3, headY - headR * 0.85);
+    ctx.stroke();
+  }
+
+  // ════════════════════════════════════
+  //  BLOCK SHIELD EFFECT
+  // ════════════════════════════════════
+  if (state === 'block') {
+    ctx.save();
+    ctx.globalAlpha = 0.3 + Math.sin(time * 8) * 0.1;
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = primary;
+    ctx.strokeStyle = primary;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(f * 15, (torsoTop + torsoBot) / 2, 25, bodyH * 0.4, 0, -Math.PI * 0.4, Math.PI * 0.4);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ════════════════════════════════════
+  //  KO STATE
+  // ════════════════════════════════════
   if (state === 'ko' && progress > 0.3) {
     ctx.globalAlpha = 0.5 + Math.sin(animTimer * 0.5) * 0.3;
-    // Sparking effect
-    for (let i = 0; i < 3; i++) {
-      const sx = rand(-bodyW/2, bodyW/2);
-      const sy = rand(torsoTop, 0);
-      ctx.beginPath();
-      ctx.arc(sx, sy, rand(1, 4), 0, Math.PI * 2);
-      ctx.fillStyle = primary;
-      ctx.shadowBlur = 10;
+    for (let i = 0; i < 4; i++) {
+      const sx = rand(-bodyW, bodyW);
+      const sy = rand(torsoTop - 10, 5);
+      ctx.save();
+      ctx.shadowBlur = 12;
       ctx.shadowColor = '#ffffff';
-      ctx.fill();
+      ctx.fillStyle = primary;
+      ctx.beginPath();
+      // Spark lines instead of just dots
+      const sa = rand(0, Math.PI * 2);
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(sx + Math.cos(sa) * rand(4, 10), sy + Math.sin(sa) * rand(4, 10));
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.restore();
     }
-    ctx.shadowBlur = 0;
   }
 
   ctx.restore();
 
-  // === SPECIAL EFFECTS ===
+  // ════════════════════════════════════
+  //  SPECIAL MOVE EFFECTS (world space)
+  // ════════════════════════════════════
+
   // Seismic slam ground wave (Titan special1)
-  if (!c.isNova && state === 'special1' && progress > 0.4 && progress < 0.8) {
-    const wp = (progress - 0.4) / 0.4;
-    const waveR = wp * 160;
+  if (!isNova && state === 'special1' && progress > 0.4 && progress < 0.85) {
+    const wp = (progress - 0.4) / 0.45;
     ctx.save();
-    ctx.globalAlpha = 1 - wp;
-    ctx.strokeStyle = c.primary;
-    ctx.lineWidth = 4;
-    ctx.shadowBlur = 20;
-    ctx.shadowColor = c.primary;
-    ctx.beginPath();
-    ctx.ellipse(x, y, waveR, 15, 0, 0, Math.PI * 2);
-    ctx.stroke();
+    ctx.globalAlpha = (1 - wp) * 0.8;
+    // Multiple expanding rings
+    for (let r = 0; r < 3; r++) {
+      const rp = clamp(wp - r * 0.08, 0, 1);
+      if (rp <= 0) continue;
+      const waveR = rp * 180;
+      ctx.strokeStyle = r === 0 ? '#ff6600' : '#ff440088';
+      ctx.lineWidth = 4 - r * 1.2;
+      ctx.shadowBlur = 15;
+      ctx.shadowColor = '#ff4400';
+      ctx.beginPath();
+      ctx.ellipse(x, y, waveR, 12 - r * 3, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // Ground crack lines
+    ctx.strokeStyle = '#ff880066';
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * Math.PI - Math.PI / 2 + (i % 2 ? 0.2 : -0.2);
+      const len = wp * 120;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + Math.cos(angle) * len, y + Math.sin(angle) * len * 0.15);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
-  // Neon blade trail (Nova special2)
-  if (c.isNova && state === 'special2' && progress > 0.3 && progress < 0.65) {
-    const tp = (progress - 0.3) / 0.35;
+  // Neon blade slash arc (Nova special2)
+  if (isNova && state === 'special2' && progress > 0.25 && progress < 0.7) {
+    const tp = (progress - 0.25) / 0.45;
     ctx.save();
-    ctx.globalAlpha = 0.7 * (1 - tp * 0.5);
+    ctx.globalAlpha = 0.8 * (1 - tp * 0.6);
+    ctx.shadowBlur = 30;
+    ctx.shadowColor = '#00f0ff';
+    // Sweeping arc
+    const arcR = 70;
+    const startAngle = -Math.PI * 0.6;
+    const endAngle = startAngle + tp * Math.PI * 1.2;
     ctx.strokeStyle = '#00f0ff';
     ctx.lineWidth = 3;
-    ctx.shadowBlur = 25;
-    ctx.shadowColor = '#00f0ff';
-    const bladeLen = 80 * Math.sin(tp * Math.PI);
     ctx.beginPath();
-    ctx.moveTo(x + f * 20, y - bodyH * 0.3);
-    ctx.lineTo(x + f * (20 + bladeLen), y - bodyH * 0.3 - 10);
+    ctx.arc(x + f * 30, y - bodyH * 0.4, arcR, f > 0 ? startAngle : Math.PI - endAngle, f > 0 ? endAngle : Math.PI - startAngle);
     ctx.stroke();
-    // Extra glow arc
+    // Blade tip glow
+    const tipAngle = f > 0 ? endAngle : Math.PI - startAngle;
+    const tipX = x + f * 30 + Math.cos(tipAngle) * arcR;
+    const tipY = y - bodyH * 0.4 + Math.sin(tipAngle) * arcR;
     ctx.beginPath();
-    ctx.arc(x + f * (20 + bladeLen * 0.7), y - bodyH * 0.3, bladeLen * 0.4, 0, Math.PI * 2);
-    ctx.fillStyle = '#00f0ff11';
+    ctx.arc(tipX, tipY, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff88';
     ctx.fill();
     ctx.restore();
   }
 
-  // Rocket uppercut trail (Titan special2)
-  if (!c.isNova && state === 'special2' && progress > 0.3 && progress < 0.65) {
+  // Rocket uppercut flame trail (Titan special2)
+  if (!isNova && state === 'special2' && progress > 0.25 && progress < 0.7) {
     ctx.save();
-    const tp = (progress - 0.3) / 0.35;
-    for (let i = 0; i < 5; i++) {
-      const t = tp - i * 0.04;
-      if (t < 0) continue;
-      ctx.globalAlpha = 0.3 * (1 - i * 0.18);
+    const tp = (progress - 0.25) / 0.45;
+    // Jet flame below character
+    for (let i = 0; i < 8; i++) {
+      const t2 = tp - i * 0.025;
+      if (t2 < 0) continue;
+      ctx.globalAlpha = 0.5 * (1 - i * 0.11);
+      const flameR = (12 - i * 1.2) * (1 + Math.sin(time * 20 + i) * 0.3);
       ctx.beginPath();
-      ctx.arc(x + rand(-5,5), y + i * 15, 10 - i * 1.5, 0, Math.PI * 2);
-      ctx.fillStyle = i % 2 === 0 ? '#ff4400' : '#ff8800';
+      ctx.arc(x + rand(-4, 4), y + 5 + i * 10, flameR, 0, Math.PI * 2);
+      const colors = ['#ffcc00', '#ff8800', '#ff4400', '#ff2200'];
+      ctx.fillStyle = colors[Math.min(i, 3)];
+      ctx.fill();
+    }
+    // Smoke wisps
+    ctx.globalAlpha = 0.15;
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath();
+      ctx.arc(x + rand(-15, 15), y + 30 + i * 15, rand(8, 16), 0, Math.PI * 2);
+      ctx.fillStyle = '#664422';
       ctx.fill();
     }
     ctx.restore();
@@ -1571,33 +2152,50 @@ let lastTime = 0;
 let accumulator = 0;
 const FIXED_DT = 1000 / 60;
 
-// Ambient background particles
+// Ambient background particles — dust, embers, energy motes
 const bgParticles = [];
-for (let i = 0; i < 30; i++) {
+for (let i = 0; i < 50; i++) {
+  const type = Math.random();
   bgParticles.push({
-    x: rand(0, VW), y: rand(0, VH),
-    vx: rand(-0.3, 0.3), vy: rand(-0.5, -0.1),
-    size: rand(1, 3), alpha: rand(0.1, 0.3),
-    color: Math.random() > 0.5 ? '#00f0ff' : '#ff440066',
+    x: rand(-100, VW + 100), y: rand(-50, VH + 50),
+    vx: rand(-0.4, 0.4), vy: rand(-0.6, -0.05),
+    size: type > 0.7 ? rand(1.5, 4) : rand(0.5, 2),
+    alpha: type > 0.7 ? rand(0.15, 0.35) : rand(0.05, 0.15),
+    color: type > 0.8 ? '#00f0ff' : type > 0.6 ? '#ff6600' : type > 0.4 ? '#8844cc' : '#334466',
+    drift: rand(0.5, 2),   // sinusoidal drift amplitude
+    driftSpeed: rand(0.5, 1.5),
+    phase: rand(0, Math.PI * 2),
   });
 }
 
 function updateBgParticles() {
+  const t = Date.now() * 0.001;
   for (const p of bgParticles) {
-    p.x += p.vx; p.y += p.vy;
-    if (p.y < -10) { p.y = VH + 10; p.x = rand(0, VW); }
-    if (p.x < -10) p.x = VW + 10;
-    if (p.x > VW + 10) p.x = -10;
+    p.x += p.vx + Math.sin(t * p.driftSpeed + p.phase) * p.drift * 0.03;
+    p.y += p.vy;
+    if (p.y < -20) { p.y = VH + 20; p.x = rand(-100, VW + 100); }
+    if (p.x < -120) p.x = VW + 100;
+    if (p.x > VW + 120) p.x = -100;
   }
 }
 
 function drawBgParticles() {
+  const t = Date.now() * 0.001;
   for (const p of bgParticles) {
+    const flickerAlpha = p.alpha * (0.7 + Math.sin(t * 3 + p.phase) * 0.3);
     ctx.beginPath();
     ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
     ctx.fillStyle = p.color;
-    ctx.globalAlpha = p.alpha;
+    ctx.globalAlpha = flickerAlpha;
     ctx.fill();
+    // Subtle glow on larger particles
+    if (p.size > 2.5) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = flickerAlpha * 0.15;
+      ctx.fill();
+    }
   }
   ctx.globalAlpha = 1;
 }
